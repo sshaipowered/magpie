@@ -1,4 +1,4 @@
-# Switchboard — Rust migration plan
+# Magpie — Rust migration plan
 
 Status: **DRAFT for review** · decided 2026-06-29 · owner: maintainer
 
@@ -56,10 +56,10 @@ agentmessenger/
   rust/             # Cargo workspace (the Rust half)
     Cargo.toml
     crates/
-      switchboard-relay/      # Phase 1  (DONE: prototype, unverified interop)
-      switchboard-protocol/   # Phase 2  (crypto + schema)
-      switchboard-client/     # Phase 3
-      switchboard-cli/        # Phase 3  (the distributable binary)
+      magpie-relay/      # Phase 1  (DONE: prototype, unverified interop)
+      magpie-protocol/   # Phase 2  (crypto + schema)
+      magpie-client/     # Phase 3
+      magpie-cli/        # Phase 3  (the distributable binary)
   specs/RUST_MIGRATION.md     # this doc
 ```
 
@@ -112,9 +112,9 @@ fail. Exact spec from `packages/protocol/src/pairing.ts`:
 - **Code normalize:** uppercase, strip non-`[A-Z0-9]`, length = `CODE_GROUPS *
   CODE_GROUP_LEN`, all chars ∈ `CODE_ALPHABET` (see `constants.ts`).
 - **rendezvousId** = `HKDF-SHA256(ikm = utf8(norm), salt = "", info =
-  "switchboard:rendezvous:v1", L = 16)` → lowercase hex (32 chars).
+  "magpie:rendezvous:v1", L = 16)` → lowercase hex (32 chars).
 - **channel key** = `HKDF-SHA256(ikm = utf8(norm), salt = "", info =
-  "switchboard:channel:v1", L = 32)`.
+  "magpie:channel:v1", L = 32)`.
 - **seal:** `iv = random 12B`; `AES-256-GCM(key, iv, plaintext)`, no AAD; tag 16B;
   **frame = iv ‖ tag ‖ ciphertext**; wire = base64(frame).
 - **open:** split `iv=[0:12]`, `tag=[12:28]`, `ct=[28:]`; GCM verify+decrypt.
@@ -136,14 +136,14 @@ corpus. This is Phase 2's primary acceptance gate.
 
 ## 6. Phases, gates, status
 
-### Phase 1 — `switchboard-relay` (drop-in)
+### Phase 1 — `magpie-relay` (drop-in)
 - **Deliverable:** Rust relay binary, wire-identical to the TS relay.
 - **Crates:** tokio, tokio-tungstenite (pinned 0.21), futures-util, serde/serde_json, nanoid.
 - **Status:** ⚠️ PROTOTYPE BUILT (`frames.rs`/`registry.rs`/`main.rs`, 13 unit
   tests green) — **interop NOT yet verified** (gate below not yet run).
 - **Acceptance gates:**
   1. `cargo test` green. ✅
-  2. **Interop:** existing TS `SwitchboardClient` does start/join/ask/answer/
+  2. **Interop:** existing TS `MagpieClient` does start/join/ask/answer/
      hangup through the Rust relay; error path (unknown rendezvous) rejected.
      (script written: `scratchpad/rust-relay-interop.mjs`, not yet run.)
   3. **Conformance parity:** the Rust relay passes the existing scenarios
@@ -152,14 +152,14 @@ corpus. This is Phase 2's primary acceptance gate.
      accept an external relay URL (small refactor) OR replicating the 6 scenarios
      as a Rust-relay integration test driven by the TS client.
 
-### Phase 2 — `switchboard-protocol` (crypto + schema)
+### Phase 2 — `magpie-protocol` (crypto + schema)
 - **Deliverable:** crate exporting `rendezvous_id`, `channel_from_code` (seal/
   open), message types (serde) + validators (extension/callId/size caps).
 - **Crates:** hkdf, sha2, aes-gcm, serde/serde_json, rand, nanoid.
 - **Acceptance gates:** shared crypto test vectors reproduced bit-for-bit (§5);
   a Rust-sealed frame opened by TS and vice-versa.
 
-### Phase 3 — `switchboard-client` + `switchboard-cli`
+### Phase 3 — `magpie-client` + `magpie-cli`
 - **Deliverable:** Rust client (ws + protocol) and a single-binary CLI
   (`commander`→`clap`) with start/join/ask/answer/resolve + report.
 - **Acceptance gates:** Rust CLI ⇄ TS peer E2E call (over either relay); static
@@ -179,7 +179,7 @@ TS remains the reference implementation; Rust must match it, not the reverse.
 
 - `cargo build --release` per target; strip; measure size (<5 MB goal).
 - Homebrew tap + GitHub Releases (CI matrix: macos arm64/x64, linux musl).
-- Goal artifact: `brew install switchboard` → relay + CLI, no Node required.
+- Goal artifact: `brew install magpie` → relay + CLI, no Node required.
   (MCP server stays an npm package for now; that's fine — agents that use MCP
   already have a Node/host runtime.)
 
