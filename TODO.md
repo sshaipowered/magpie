@@ -67,6 +67,19 @@ is mode ② (real agent autonomy) + UX + hardening + reach.
           DEFAULT_ASK_TIMEOUT_MS 5 → 15 min so thorough turns (read repo +
           reason, seen ~7 min) are never cut off, while a wedged peer is still
           bounded. sb_ask also accepts an optional per-call reply timeout.
+    - [x] **A failed join no longer wedges the whole session (2026-07-15,
+          `client.ts`+`session.ts`, live-verified over Fly).** A `sb_join` on a
+          dead code makes the relay answer `UNKNOWN_RENDEZVOUS` and drop the
+          socket; the SessionStore was memoizing that now-dead client per relay
+          URL, so EVERY later `sb_start`/`sb_join` on the same relay failed with
+          "magpie client is not connected" for the rest of the session. Three-part
+          fix: (1) `MagpieClient.isConnected` getter; (2) `#onClose` now notifies
+          hangup listeners on a socket drop (unblocks parked `sb_ask`/`sb_listen`
+          AND triggers cache eviction); (3) `#ensureClient` reuses a cached client
+          only if `isConnected`, else evicts + reconnects. Live-reproduced through
+          the real SessionStore: dead-invite join failed → `start` on the same
+          store recovered (pre-fix: "not connected"). +2 regression tests (35 mcp,
+          4 client, 37 conformance all green).
 - [x] **THE core: autonomous agree-loop (S2).** `AutoDriver` (drives a goal:
       ask → evaluate peer reply vs its OWN spec/files → push back → conclude) +
       `ClaudeDriver`, paired with the existing `AutoAttendant`/`ClaudeResponder`.

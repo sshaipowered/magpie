@@ -286,6 +286,16 @@ export class MagpieClient {
     this.#channels.delete(callId);
   }
 
+  /**
+   * Whether the underlying socket is open and usable. A caller that memoizes
+   * clients (e.g. the MCP session store) must check this before reuse: a relay
+   * can drop us (an UNKNOWN_RENDEZVOUS join closes the socket), and a dead
+   * client would fail every later start/join with "not connected".
+   */
+  get isConnected(): boolean {
+    return !this.#closed && this.#ws.readyState === WebSocket.OPEN;
+  }
+
   /** Close the underlying WebSocket and drop all per-call state. */
   close(): void {
     this.#closed = true;
@@ -447,5 +457,15 @@ export class MagpieClient {
     for (const p of this.#pendingJoin.splice(0)) p.reject(err);
     this.#pendingChannel.splice(0);
     this.#channels.clear();
+    // A socket drop ends every call on this client. Notify the hangup
+    // listeners so a session layer can unblock parked sb_ask/sb_listen calls
+    // and invalidate any memoized reference to this now-dead client.
+    for (const cb of this.#hangupCbs) {
+      try {
+        cb(reason);
+      } catch {
+        // a listener must not break teardown
+      }
+    }
   }
 }

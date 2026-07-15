@@ -234,11 +234,17 @@ function fakeRelayClient(url: string): {
   client: MagpieClient;
   joins: { from: string; code: string }[];
   hangupCbs: ((reason: string) => void)[];
+  /** Simulate the socket dropping (relay closed us / network death). */
+  drop: () => void;
 } {
   const joins: { from: string; code: string }[] = [];
   const hangupCbs: ((reason: string) => void)[] = [];
+  let connected = true;
   const client = {
     relayUrlForTest: url,
+    get isConnected() {
+      return connected;
+    },
     onMessage: vi.fn(),
     onHangup: vi.fn((cb: (reason: string) => void) => hangupCbs.push(cb)),
     onPeerJoined: vi.fn(),
@@ -251,9 +257,11 @@ function fakeRelayClient(url: string): {
     }),
     send: vi.fn(async () => {}),
     hangup: vi.fn(async () => {}),
-    close: vi.fn(),
+    close: vi.fn(() => {
+      connected = false;
+    }),
   } as unknown as MagpieClient;
-  return { client, joins, hangupCbs };
+  return { client, joins, hangupCbs, drop: () => (connected = false) };
 }
 
 /** A SessionStore whose connections are faked, keyed by the URL requested. */
@@ -265,8 +273,10 @@ function fakeStore(defaultRelayUrl: string | null) {
     relayUrl: defaultRelayUrl,
     connect: async (url: string) => {
       connectUrls.push(url);
+      // A reconnect must mint a fresh, live client — never hand back a dropped
+      // one (that is exactly the "not connected" bug this store must avoid).
       let fake = connected.get(url);
-      if (!fake) {
+      if (!fake || !fake.client.isConnected) {
         fake = fakeRelayClient(url);
         connected.set(url, fake);
       }
@@ -311,6 +321,42 @@ describe('SessionStore routes joins by invite-carried relay URL', () => {
     await store.join('K7F3-9M2P-XQ4R@ws://other:9000');
     await store.join('K7F3-9M2P-XQ4R'); // default relay
     expect(connectUrls).toEqual(['ws://other:9000', 'ws://default:8787']);
+  });
+
+  // Regression: a failed join (e.g. UNKNOWN_RENDEZVOUS) makes the relay drop
+  // the socket. The dead client must NOT stay cached, or every later
+  // start/join on that relay fails with "magpie client is not connected".
+  it('reconnects after the socket drops instead of reusing a dead client', async () => {
+    const { store, connected, connectUrls } = fakeStore('ws://default:8787');
+    const url = 'ws://relay-x:9000';
+
+    await store.join(`K7F3-9M2P-XQ4R@${url}`); // connect #1
+    expect(connectUrls).toEqual([url]);
+
+    // The relay closes us after the bad join; the socket is now dead.
+    connected.get(url)!.drop();
+
+    // The next call to the SAME relay must reconnect (evict + fresh client),
+    // not hand back the dead one.
+    const again = await store.join(`K7F3-9M2P-XQ4R@${url}`); // connect #2
+    expect(connectUrls).toEqual([url, url]);
+    expect(connected.get(url)!.client.isConnected).toBe(true);
+    expect(again.peer).toBe(PEER);
+  });
+
+  // Same fix via the other path: when the client fires its hangup listeners on
+  // a socket drop, the store evicts it from the cache immediately.
+  it('evicts a client from the cache when its socket-drop hangup fires', async () => {
+    const { store, connected, connectUrls } = fakeStore('ws://default:8787');
+    const url = 'ws://relay-y:9000';
+
+    await store.join(`K7F3-9M2P-XQ4R@${url}`); // connect #1
+    const v1 = connected.get(url)!;
+    v1.drop();
+    for (const cb of v1.hangupCbs) cb('connection closed'); // socket-drop notification
+
+    await store.join(`K7F3-9M2P-XQ4R@${url}`); // must reconnect -> connect #2
+    expect(connectUrls).toEqual([url, url]);
   });
 
   it('rejects an invite whose relay URL has a bad scheme', async () => {

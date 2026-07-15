@@ -490,9 +490,16 @@ export class SessionStore {
   }
 
   /** Lazily connect to `url` (once per URL) and wire the dispatch handlers. */
-  #ensureClient(url: string): Promise<MagpieClient> {
+  async #ensureClient(url: string): Promise<MagpieClient> {
     const existing = this.#clients.get(url);
-    if (existing) return existing;
+    if (existing) {
+      const client = await existing.catch(() => null);
+      // Reuse only if the socket is still live. A relay can drop us after a
+      // failed join (UNKNOWN_RENDEZVOUS closes the connection); a dead cached
+      // client must not poison every later start/join with "not connected".
+      if (client && client.isConnected) return client;
+      this.#clients.delete(url);
+    }
 
     const connecting = this.#connect(url).then((client) => {
       client.onMessage((msg) => {
@@ -506,6 +513,11 @@ export class SessionStore {
         // is correct — and it must not leak across relays.
         for (const s of this.#sessions.values()) {
           if (s.client === client) s.markClosed(reason);
+        }
+        // If the underlying socket dropped, evict this client from the cache
+        // so the next start/join reconnects instead of reusing a dead socket.
+        if (!client.isConnected && this.#clients.get(url) === connecting) {
+          this.#clients.delete(url);
         }
       });
       client.onPeerJoined((callId, peer) => {
