@@ -1,6 +1,6 @@
 {
   "name": "@magpie/cli",
-  "version": "0.0.1",
+  "version": "0.2.0",
   "description": "Magpie CLI: the non-developer-simple surface. start｜join｜call｜listen｜hangup over a short pairing code.",
   "license": "MIT",
   "type": "module",

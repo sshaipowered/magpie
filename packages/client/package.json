@@ -1,6 +1,6 @@
 {
   "name": "@magpie/client",
-  "version": "0.0.1",
+  "version": "0.2.0",
   "description": "Magpie client: wraps a WebSocket to the relay plus the per-call pairing crypto. Speaks only ciphertext to the relay.",
   "license": "MIT",
   "type": "module",
