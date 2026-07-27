@@ -212,24 +212,62 @@ Still open (not relay-blocking):
 - [ ] TS relay: mirror pending/call caps + rate limit (dev/reference only —
       the hosted public relay is the Rust binary).
 
-## P1 — Onboarding / OSS launch (self-host model, decided 2026-07-01)
+## P1 — Onboarding / OSS launch
 
-**Model: we host NOTHING.** Open-source, users self-host the relay. No
-commercialization → no hosted service/billing/token pressure. Relay is a ~1 MB
-binary → trivially self-hosted (own machine + Tailscale/LAN for a trusted pair,
-or a small cloud box). Onboarding = run relay → both `mcp add` at its URL → share
-a pairing code.
+**Model REVISED 2026-07-27 (was: "we host NOTHING").** Requiring every user to
+stand up a relay before sending one message was 배보다 배꼽이 큰 — it cost more
+than the thing it enabled. We now host a default relay (Fly, ~$2/mo, Tokyo) and
+the MCP resolves it from a pointer file at startup, so a fresh install needs
+zero configuration. Self-hosting stays fully supported and is one env var
+(`MAGPIE_RELAY_URL`), just no longer the price of admission. The relay brokers
+ciphertext only, so hosting it grants us nothing to read. Onboarding is now:
+install → share one invite token.
+
+### ✅ v0.2.0 shipped (2026-07-27) — the release that made onboarding real
+The bottleneck was never the code: it was that **the published artifact was not
+the working code.** v0.1.0 (2026-07-05) predated the hosted relay, the DoS
+hardening, wss:// support, and both live-found UX fixes — yet the public site,
+the public repo, and `install.sh` had been live for weeks handing that build to
+anyone who found it. Fixed by cutting v0.2.0 from HEAD (17 commits) and
+rewriting the front door, which still told the self-host story the code had
+already abandoned:
+- README opened with "no hosted server — **you run everything**" and never even
+  mentioned the `curl | sh` one-liner the website advertises.
+- `install.sh` signed off with "Self-host a relay: set MAGPIE_RELAY_URL=…".
+- Site said "self-hosted · no accounts" and used `ws://relay.local:8787`.
+- Real bug found while auditing: `install.ps1` tested `claude mcp get` with
+  try/catch, but native non-zero exits do not throw under PS 5.1, so `$exists`
+  stayed true and **Windows users never got the MCP registered.** Now checks
+  `$LASTEXITCODE`.
+
+Verified against the actual downloaded release artifact, not the source tree:
+`magpie 0.2.0` from `/releases/latest/`, MCP booted with no `MAGPIE_RELAY_URL`
+→ resolved `wss://magpie-relay.fly.dev`, two-party call between two released
+binaries with `sb_ask` fired 3s BEFORE the peer joined (parked, then answered),
+through `sb_resolve`. 215 tests green (141 TS + 74 Rust).
 - [x] Relay `Dockerfile` + `.dockerignore` (`docker build -t magpie-relay rust/
       && docker run -p 8787:8787 …`). *(Untested locally — no docker on dev box;
       relay binary itself verified via interop/E2E.)*
-- [x] README self-host **Quickstart** (from-source path works today).
+- [x] README **Quickstart** rewritten around the one-line install (2026-07-27).
 - [x] Repo **English-only** (de-Koreanized the two multibyte test fixtures).
-- [ ] **npm publish `@magpie/{protocol,client,mcp}`** → unlocks the
-      `npx -y @magpie/mcp` one-liner (the actual "dead-simple" onboarding).
-      Needs: npm scope decision (is `@magpie` free?) + monorepo publish setup.
-- [ ] Prebuilt relay/CLI **binaries + registry Docker image** (brew/curl install).
-- [ ] **Simple website** (30-sec explainer + copy-paste per-vendor commands).
-- [ ] **Flip repo public** — ONLY once the above are done (public now = pointless).
+- [x] Prebuilt **binaries** for 5 platforms + `curl | sh` / `irm | iex`
+      installers, served from Pages, auto-registering the MCP with Claude Code
+      and Codex. Docker image not published (the binary makes it optional).
+- [x] **Simple website** live at ssh-ai.github.io/magpie (30-sec explainer,
+      animated session demo, one-line install).
+- [x] **Repo public.**
+- [ ] **npm publish `@magpie/{protocol,client,mcp}`** → the `npx -y @magpie/mcp`
+      path. Now SECONDARY: the advertised install is the binary one-liner, which
+      needs no Node at all. Scope `@magpie` is free (E404 on registry); packages
+      are not `private`; still needs `files` fields + an npm login + publish
+      order (protocol → client → mcp).
+- [ ] **`MAGPIE_EXTENSION` is a hard requirement and the server exits if it is
+      missing** — found while smoke-testing v0.2.0. Harmless on the installer
+      path (it always sets `@$(whoami)/main`), but anyone registering the MCP by
+      hand (the Antigravity snippet we print) gets an immediate exit whose
+      stderr most MCP hosts swallow, i.e. "server failed to start" with no clue.
+      Default it to `@<os-user>/main` like the installer does, and keep the
+      error only for a malformed value.
 - Dropped: cloud "Deploy" button (not core); relay connect-token (only matters for
   public-internet exposure — revisit then, with the DoS caps).
 
