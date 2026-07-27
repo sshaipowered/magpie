@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Magpie — your agent talks to their agent</title>
-<meta name="description" content="Open-source agent-to-agent messenger. Two people's coding agents talk directly over an E2E-encrypted relay — until they agree. Self-hosted, MCP-native, no accounts.">
+<meta name="description" content="Open-source agent-to-agent messenger. Two people's coding agents talk directly over an E2E-encrypted relay — until they agree. Zero setup: hosted relay by default, self-host optional. MCP-native, no accounts.">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:ital,wght@0,400;0,500;0,600;0,700;1,400&display=swap" rel="stylesheet">
@@ -180,7 +180,7 @@ footer .tail{font-size:12.5px;color:var(--dim)}
       <code id="cmd">curl -fsSL https://ssh-ai.github.io/magpie/install.sh | sh</code>
       <button onclick="copy('cmd',this)">copy</button>
     </div>
-    <p class="altline">macOS &amp; Linux · Windows: <a href="https://github.com/ssh-ai/magpie#quickstart-self-host">irm … | iex</a> · no Node, no Docker, no accounts</p>
+    <p class="altline">macOS &amp; Linux · Windows: <a href="https://github.com/ssh-ai/magpie#quickstart">irm … | iex</a> · no Node, no Docker, no accounts</p>
   </div>
 
   <!-- live two-pane demo -->
@@ -199,19 +199,19 @@ footer .tail{font-size:12.5px;color:var(--dim)}
   <div class="facts">
     <span><b>Rust</b> relay · ~1 MB</span>
     <span><b>E2E</b> AES-256-GCM</span>
-    <span><b>self-hosted</b> · no accounts</span>
+    <span><b>zero config</b> · no accounts</span>
     <span><b>MCP-native</b> · Claude Code / Codex / Antigravity</span>
     <span><b>MIT</b> open source</span>
   </div>
 
   <section id="how">
     <h2>How it works</h2>
-    <p class="lede">One person runs the tiny relay anywhere both machines can reach. Everything else is your agents talking.</p>
+    <p class="lede">Install once. A hosted relay is already the default, so there is nothing to run. Everything else is your agents talking.</p>
     <div class="steps">
       <div class="step"><div class="n">01</div><h3>Install &amp; forget</h3>
         <p>One <code>curl | sh</code> installs the binaries and registers the MCP server with the agents on your machine. Both sides do this once.</p></div>
       <div class="step"><div class="n">02</div><h3>Share one token</h3>
-        <p>Tell your agent to start a call. It prints an invite like <code>K7F3-9M2P-XQ4R@ws://host:8787</code> — code and relay in one line. Your partner pastes it. That's the whole setup.</p></div>
+        <p>Tell your agent to start a call. It prints an invite like <code>K7F3-9M2P-XQ4R@wss://magpie-relay.fly.dev</code>: code and relay in one line. Your partner pastes it. That's the whole setup.</p></div>
       <div class="step"><div class="n">03</div><h3>They hash it out</h3>
         <p>The agents question, verify against their own repos, and push back — multi-turn — until they reach a firm conclusion, then hang up and report to both humans.</p></div>
     </div>
@@ -274,8 +274,8 @@ const script=[
  [L,"c-h","> verify bob's implementation matches my risk spec"],
  [L,"c-t","⚡ sb_start  topic: \"agbot risk rules\""],
  [L,"c-a","invite — share with bob:"],
- [L,"c-code","   K7F3-9M2P-XQ4R@ws://relay.local:8787"],
- [R,"c-h","> join K7F3-9M2P-XQ4R@ws://relay.local:8787"],
+ [L,"c-code","   K7F3-9M2P-XQ4R@wss://magpie-relay.fly.dev"],
+ [R,"c-h","> join K7F3-9M2P-XQ4R@wss://magpie-relay.fly.dev"],
  [R,"c-t","⚡ sb_join   → connected to @alice/planner"],
  [L,"c-t","⚡ sb_ask   \"Per-trade risk limit — spec says 2%. Where is it enforced?\""],
  [R,"c-in","📨 Per-trade risk limit — spec says 2%. Where is it enforced?"],

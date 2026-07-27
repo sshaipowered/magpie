@@ -32,50 +32,50 @@ B's agent:  magpie join K7F3-9M2P-XQ4R
 
 One handshake, then unlimited automatic round trips — strictly cheaper than relaying by hand.
 
-## Quickstart (self-host)
+## Quickstart
 
-No accounts, no hosted server — **you run everything**. One person runs a relay both agents can reach (same LAN/Tailscale, or a small cloud box); each person points their agent at it.
+No accounts, no config, no server to run. A hosted relay is the default, so install is the whole setup.
 
-**1. Run a relay** (one person, on a reachable host):
-
-```bash
-# Docker (compiles the ~1 MB relay in-container):
-docker build -t magpie-relay rust/ && docker run -p 8787:8787 magpie-relay
-
-# …or straight from source (in ./rust):
-cargo run --release -p magpie-relay
-# → [magpie-relay] listening on ws://0.0.0.0:8787
-```
-
-It brokers **ciphertext only** — it never sees your code or messages. The reachable URL is `ws://<host>:8787` (put it behind a TLS reverse proxy for `wss://` on the public internet). For a trusted pair, running it on one laptop over Tailscale/LAN is enough.
-
-**2. Add the Magpie MCP to each agent** (both people). Pointing at the relay via `MAGPIE_RELAY_URL` is only required for the person who *starts* calls — a joiner pasting a full invite can skip it:
+**1. Install** (both people, once):
 
 ```bash
-# from source (today) — after `npm install && npx tsc -b`:
-claude mcp add magpie \
-  -e MAGPIE_RELAY_URL=ws://<relay-host>:8787 \
-  -e MAGPIE_EXTENSION=@you/role \
-  -- node "$(pwd)/packages/mcp/dist/bin.js"
-
-# planned one-liner (once published to npm):
-# claude mcp add magpie -e MAGPIE_RELAY_URL=… -e MAGPIE_EXTENSION=@you/role -- npx -y @magpie/mcp
+curl -fsSL https://ssh-ai.github.io/magpie/install.sh | sh     # macOS / Linux
+irm https://ssh-ai.github.io/magpie/install.ps1 | iex          # Windows
 ```
 
-Codex / Antigravity: register the same command in their MCP config — the tools are identical.
+Single static binaries (`magpie`, `magpie-relay`, `magpie-mcp`) into `~/.magpie/bin`. No Node, no Docker. The installer auto-registers the MCP server with Claude Code and Codex if it finds them; for other agents it prints the command to paste.
 
-**3. Just talk to your agent:**
+**2. Just talk to your agent:**
 
 ```
 You → agent:            "start a magpie call about the agbot risk limit"
-agent → you:            invite K7F3-9M2P-XQ4R@ws://<relay-host>:8787   # ONE token: code + relay
-partner → their agent:  "join K7F3-9M2P-XQ4R@ws://<relay-host>:8787"
+agent → you:            invite K7F3-9M2P-XQ4R@wss://magpie-relay.fly.dev   # ONE token: code + relay
+partner → their agent:  "join K7F3-9M2P-XQ4R@wss://magpie-relay.fly.dev"
 # the two agents exchange Q&A autonomously until they agree, then summarize to both of you.
 ```
 
-The invite is self-contained — the joiner needs **no relay config** (`MAGPIE_RELAY_URL` is optional on their side; it's only needed to *start* calls or to join with a bare code).
+That's it. The invite carries the relay address, so the joiner configures nothing.
 
 Prefer a human at the keyboard instead of an agent? The `magpie` CLI (Rust, single binary) does `start` / `join` interactively.
+
+### Run your own relay (optional)
+
+The default relay brokers **ciphertext only** and can never read your code or messages, but nothing stops you from running your own. It is the same ~1 MB binary you already installed:
+
+```bash
+magpie-relay                      # → listening on ws://0.0.0.0:8787
+# …or from source, in ./rust:  cargo run --release -p magpie-relay
+# …or Docker:  docker build -t magpie-relay rust/ && docker run -p 8787:8787 magpie-relay
+```
+
+Then point the *starting* side at it with `MAGPIE_RELAY_URL=ws://<host>:8787` (put it behind a TLS reverse proxy for `wss://` on the public internet; see [`deploy/relay/`](deploy/relay/)). The joining side still needs nothing, since the invite carries the address.
+
+**From source instead of the installer:**
+
+```bash
+npm install && npx tsc -b
+claude mcp add magpie -e MAGPIE_EXTENSION=@you/role -- node "$(pwd)/packages/mcp/dist/bin.js"
+```
 
 ## Security model (summary)
 
@@ -101,4 +101,4 @@ See [`docs/PROTOCOL.md`](docs/PROTOCOL.md) for the full handshake and threat mod
 
 ## Status
 
-Working core, pre-release. MIT licensed. Agent↔agent calls (query → answer → mutual agreement → report) run cross-machine, end-to-end encrypted, over MCP. The relay/protocol/client/CLI have a **Rust implementation** (single static binaries; relay ~1 MB) alongside the TypeScript reference packages, verified byte-compatible on the wire and crypto. Not yet published to npm and not yet a public repo — **self-host from source** per the Quickstart above.
+Working core, MIT licensed. Agent↔agent calls (query → answer → mutual agreement → report) run cross-machine, end-to-end encrypted, over MCP, verified live across vendors (Claude ↔ Gemini). The relay/protocol/client/CLI have a **Rust implementation** (single static binaries; relay ~1 MB) alongside the TypeScript reference packages, verified byte-compatible on the wire and crypto. Install via the one-liner above; the npm packages are not published yet, so the from-source path is still `node packages/mcp/dist/bin.js`.

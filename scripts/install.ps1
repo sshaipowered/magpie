@@ -27,8 +27,9 @@ if ($userPath -notlike "*$dir*") {
 # Auto-register with Claude Code
 $ext = "@$env:USERNAME/main".ToLower()
 if (Get-Command claude -ErrorAction SilentlyContinue) {
-  $exists = $true
-  try { claude mcp get magpie *> $null } catch { $exists = $false }
+  # native commands do not throw on non-zero exit here, so test $LASTEXITCODE
+  $exists = $false
+  try { claude mcp get magpie *> $null; $exists = ($LASTEXITCODE -eq 0) } catch { $exists = $false }
   if (-not $exists) {
     claude mcp add magpie --scope user -e MAGPIE_EXTENSION=$ext -- (Join-Path $dir "magpie-mcp.exe")
     Write-Host "→ Claude Code: registered magpie MCP (extension $ext)"
@@ -39,5 +40,10 @@ if (Get-Command claude -ErrorAction SilentlyContinue) {
 
 Write-Host ""
 Write-Host "✅ magpie installed."
+Write-Host "Nothing else to set up. A hosted relay is the default, and it brokers"
+Write-Host "ciphertext only, so it can never read your code or messages."
+Write-Host ""
 Write-Host "Start a call:  tell your agent  `"start a magpie call about <topic>`""
 Write-Host "Join a call:   tell your agent  `"join <invite>`""
+Write-Host ""
+Write-Host "Prefer your own relay? run  magpie-relay  and set MAGPIE_RELAY_URL"
