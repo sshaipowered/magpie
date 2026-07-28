@@ -83,3 +83,14 @@ jobs:
           files: |
             magpie-*.tar.gz
             magpie-*.zip
+
+  # Building five platforms proves only that they compile. `needs: build` means
+  # every archive is attached before this runs, so it downloads what a user
+  # would download and drives a real call with it. Without this the release is
+  # green on compile alone, which is how a Windows-only registration bug stayed
+  # live for weeks.
+  smoke:
+    needs: build
+    uses: ./.github/workflows/smoke.yml
+    with:
+      tag: ${{ github.ref_name }}

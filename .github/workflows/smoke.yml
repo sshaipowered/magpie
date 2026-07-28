@@ -1,0 +1,260 @@
+# Download the ACTUAL released archive for each platform and drive a real
+# two-party call through the real hosted relay.
+#
+# release.yml builds five platforms and runs none of them; ci.yml runs 230 tests
+# on one ubuntu box against source. Nothing in between ever executed a shipped
+# binary, which is how a Windows-only registration bug stayed live for weeks.
+name: smoke
+
+on:
+  # release.yml calls this with `needs: build`, passing the concrete tag.
+  #
+  # `release: [published]` is NOT usable: our releases are created by
+  # GITHUB_TOKEN, and GitHub does not start workflow runs from token-created
+  # events (softprops/action-gh-release documents the same). Making it fire
+  # would mean parking a contents:write PAT in a public repo, which is a far
+  # worse trade than losing one trigger.
+  #
+  # workflow_call also inherits the CALLER's github context, so on a tag push
+  # `github.ref` is the tag and the checkout below is version-locked to the
+  # release under test. `workflow_run` would instead run the default branch.
+  workflow_call:
+    inputs:
+      tag:
+        description: 'Release tag to smoke-test, or "latest".'
+        type: string
+        required: false
+        default: latest
+
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Release tag (e.g. v0.2.1), or "latest".'
+        type: string
+        required: false
+        default: latest
+
+  # An unchanged release going red overnight means the relay or the pointer file
+  # regressed, not the binaries. Nothing else separates those two causes.
+  # Not a safety net on its own: GitHub drops scheduled runs under load, and
+  # disables them outright after 60 days without repo activity.
+  schedule:
+    - cron: "17 6 * * *" # off the hour deliberately; :00 is the most-dropped slot
+
+permissions:
+  contents: read # release assets are public; this is least-privilege hygiene
+
+concurrency:
+  group: smoke-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  # Resolving "latest" per-leg would let two tags landing close together hand
+  # different platforms different builds, and the gate would then certify a set
+  # of binaries that never existed as one release. Resolve exactly once.
+  resolve:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      tag: ${{ steps.rel.outputs.tag }}
+      version: ${{ steps.rel.outputs.version }}
+    steps:
+      - name: Resolve the release tag
+        id: rel
+        shell: bash
+        # Via env, never `${{ inputs.tag }}` inline: GitHub substitutes into the
+        # script text BEFORE bash parses it, so an inline expansion lets a
+        # dispatch input close the quote and run arbitrary code on the runner.
+        # The validation below cannot help, since it would run after that.
+        env:
+          TAG_IN: ${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+          TAG="${TAG_IN:-latest}"
+          if [ "$TAG" = "latest" ]; then
+            # An infrastructure lookup, so retries are legitimate here. They are
+            # NOT legitimate around the call itself, where a retry would paper
+            # over the intermittent peer-join races this test exists to catch.
+            # Public assets need no auth: an Authorization header actually
+            # breaks the cross-host redirect.
+            TAG="$(curl -fsSL --retry 5 --retry-all-errors --retry-delay 2 \
+              --connect-timeout 10 --max-time 60 \
+              -o /dev/null -w '%{url_effective}' \
+              https://github.com/ssh-ai/magpie/releases/latest | sed 's#.*/tag/##')"
+          fi
+          case "$TAG" in
+            v[0-9]*) ;;
+            *) echo "refusing to smoke-test an implausible tag: '$TAG'" >&2; exit 1 ;;
+          esac
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "version=magpie ${TAG#v}" >> "$GITHUB_OUTPUT"
+          echo "smoke-testing $TAG"
+
+      # A hosted-relay or Pages outage would otherwise red all four legs at once
+      # and read exactly like a four-platform product regression. Fail here
+      # instead, with a message that says which it was.
+      - name: Pre-flight the hosted relay pointer
+        shell: bash
+        run: |
+          set -euo pipefail
+          if ! curl -fsS --retry 5 --retry-all-errors --max-time 30 \
+              https://ssh-ai.github.io/magpie/relay.txt | grep -qE '^wss?://'; then
+            echo "relay pointer unreachable or malformed — infrastructure, not the release" >&2
+            exit 1
+          fi
+
+  smoke:
+    needs: resolve
+    strategy:
+      # Never mask a leg. Hiding four platforms because Windows broke is the
+      # precise failure mode this workflow exists to prevent.
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-14
+            asset: magpie-darwin-arm64.tar.gz
+            exe: ''
+          - runner: ubuntu-latest
+            asset: magpie-linux-x64.tar.gz
+            exe: ''
+          - runner: ubuntu-24.04-arm
+            asset: magpie-linux-arm64.tar.gz
+            exe: ''
+          - runner: windows-latest
+            asset: magpie-windows-x64.zip
+            exe: '.exe'
+    #
+    # darwin-x64 is deliberately absent. release.yml cross-compiles it on
+    # macos-14 and the Intel runners are retired, so it could only run under
+    # Rosetta 2 — where bun's x64 build warns "CPU lacks AVX" because Rosetta
+    # has no AVX. Real Intel Macs have AVX, so that is a test artifact rather
+    # than a product bug, and a leg for it would be flaky by construction.
+    # darwin-x64 therefore ships BUILD-VERIFIED ONLY. A green run here is not
+    # coverage of it.
+    runs-on: ${{ matrix.runner }}
+    # The driver's own watchdog fires at 10 min and bounds every await. This is
+    # the outer stop so a wedged relay cannot burn the 360 min default: sb_ask
+    # parks for up to 10 min server-side when no peer has joined, which is
+    # exactly the behaviour under test.
+    timeout-minutes: 20
+    steps:
+      # On a tag push (the release path) `github.ref` is already the tag, so the
+      # default checkout is version-locked to the binaries under test. The cron
+      # is the exception: it runs on main, and a driver that has moved ahead of
+      # the last release would fail on the drift rather than on the relay it is
+      # meant to watch. Pin that case to the tag. An empty ref means "default".
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'schedule' && needs.resolve.outputs.tag || '' }}
+
+      - name: Download and extract the release archive (unix)
+        if: runner.os != 'Windows'
+        shell: bash
+        env:
+          URL: https://github.com/ssh-ai/magpie/releases/download/${{ needs.resolve.outputs.tag }}/${{ matrix.asset }}
+        run: |
+          set -euo pipefail
+          mkdir -p bin
+          # -f matters: without it a 404 HTML page downloads "successfully" and
+          # surfaces later as a baffling tar error.
+          curl -fsSL --retry 3 --retry-all-errors --max-time 180 -o asset.tar.gz "$URL"
+          test "$(wc -c < asset.tar.gz)" -gt 1000000
+          tar -xzf asset.tar.gz -C bin
+          # Members already carry 0755, but this becomes mandatory the moment
+          # anyone swaps in actions/upload-artifact, which strips the exec bit.
+          chmod +x bin/magpie bin/magpie-relay bin/magpie-mcp
+          # curl never sets com.apple.quarantine (only LSFileQuarantineEnabled
+          # apps do), so today this is a no-op. It stays so that changing the
+          # downloader cannot silently turn every macOS leg into a bare SIGKILL.
+          if [ "$RUNNER_OS" = "macOS" ]; then xattr -dr com.apple.quarantine bin || true; fi
+          ls -l bin
+
+      - name: Download and extract the release archive (windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        env:
+          URL: https://github.com/ssh-ai/magpie/releases/download/${{ needs.resolve.outputs.tag }}/${{ matrix.asset }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $ProgressPreference = 'SilentlyContinue'
+          New-Item -ItemType Directory -Force bin | Out-Null
+          # curl.exe, not `curl`: in Windows PowerShell `curl` is an alias for
+          # Invoke-WebRequest, which understands none of these flags.
+          curl.exe -fsSL --retry 3 --retry-all-errors --max-time 180 -o asset.zip "$env:URL"
+          if ($LASTEXITCODE -ne 0) { throw "download failed with exit $LASTEXITCODE" }
+          if ((Get-Item asset.zip).Length -lt 1000000) { throw "asset.zip is implausibly small" }
+          # System32's tar.exe is bsdtar and auto-detects zip. `-z` would be
+          # wrong for a zip, `unzip` is not reliably on PATH on these images, and
+          # Expand-Archive is the slow path for a 42 MB archive.
+          tar.exe -xf asset.zip -C bin
+          if ($LASTEXITCODE -ne 0) { throw "extract failed with exit $LASTEXITCODE" }
+          Get-ChildItem bin | Format-Table Name, Length
+
+      # Before setup-node on purpose: the released binaries are standalone
+      # (magpie is Rust, magpie-mcp is bun-compiled), and nothing about running
+      # them may depend on a toolchain an end user would not have.
+      - name: Assert the released CLI reports the expected version
+        shell: bash
+        env:
+          EXPECTED: ${{ needs.resolve.outputs.version }}
+        run: |
+          set -euo pipefail
+          actual="$(./bin/magpie${{ matrix.exe }} --version | tr -d '\r')"
+          # String equality, not a regex. A loose match is exactly how a stale or
+          # mis-tagged artifact sails through a "version check".
+          if [ "$actual" != "$EXPECTED" ]; then
+            echo "version mismatch: got '$actual', expected '$EXPECTED'" >&2
+            exit 1
+          fi
+          echo "$actual"
+
+      # magpie-relay ships in every archive and would otherwise be the one
+      # binary nothing ever executes: the call under test goes through the
+      # HOSTED relay, so a self-host relay that cannot start on a platform would
+      # pass the whole matrix. It takes a port from argv and announces its bound
+      # address on stderr; port 0 lets the OS pick so concurrent legs cannot
+      # collide.
+      - name: Assert the released relay binary starts
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          set -euo pipefail
+          ./bin/magpie-relay 0 > relay.log 2>&1 &
+          pid=$!
+          for _ in $(seq 1 50); do
+            grep -q "listening on" relay.log && break
+            sleep 0.2
+          done
+          kill "$pid" 2>/dev/null || true
+          grep -q "listening on" relay.log || { echo "magpie-relay never announced a listener:" >&2; cat relay.log >&2; exit 1; }
+          cat relay.log
+
+      # Only the driver (.mjs) needs Node. Pinned so a runner-image Node bump
+      # cannot change the result.
+      - uses: actions/setup-node@v4
+        with: { node-version: 22 }
+
+      # No continue-on-error, no `|| true`, no `if: always()`: the step's exit
+      # code IS the platform's verdict, and Windows is the whole reason this
+      # file exists.
+      - name: Two-party call over the hosted relay
+        shell: bash
+        run: |
+          set -euo pipefail
+          node scripts/smoke.mjs "bin/magpie-mcp${{ matrix.exe }}"
+
+  # With fail-fast:false a single red leg can still read as an ambiguous overall
+  # result. This collapses the matrix into one unambiguous verdict for the
+  # release run that calls this workflow. It is not a PR gate: there is no
+  # pull_request trigger, so requiring it as a status check would hang every PR
+  # forever.
+  gate:
+    needs: smoke
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Require every platform to pass
+        run: |
+          echo "smoke matrix result: ${{ needs.smoke.result }}"
+          [ "${{ needs.smoke.result }}" = "success" ]
