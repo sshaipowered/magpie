@@ -223,6 +223,35 @@ zero configuration. Self-hosting stays fully supported and is one env var
 ciphertext only, so hosting it grants us nothing to read. Onboarding is now:
 install → share one invite token.
 
+### ✅ Release smoke test (2026-07-28) — the OS axis is no longer a guess
+Every live bug of the last week shared one shape: **it only appeared outside this
+machine.** The Windows registration bug, the unsanitized `@$(whoami)/main`, the
+sb_ask peer-wait — all pass on macOS with the account name `user`. Unit tests
+could not catch them (they run on one ubuntu box against SOURCE) and neither
+could I (one OS, one username, one timing).
+
+`scripts/smoke.mjs` + `.github/workflows/smoke.yml` close that. The workflow
+downloads the ACTUAL released archive per platform and drives a real two-party
+call over the real hosted relay: 15 steps with negative controls (join on an
+unregistered code refused, sb_ask before any join PARKS, sb_ask after resolve
+refused) and a random nonce in both directions that must survive the round trip
+through the untrusted-peer fence, so no assertion can match text the script
+itself produced. Runs on release (`needs: build`), on demand, and nightly.
+
+**First run, 2026-07-28: macOS arm64, Linux x64, Linux arm64, and WINDOWS all
+PASS.** Windows derived `@runneradmin/main` and completed the call in 5.8s. That
+was the single biggest unknown and it is now measured rather than assumed.
+
+Written, then adversarially reviewed for false-pass / flake / CI defects. The
+review caught that the workflow was **dead code** (it exposed `workflow_call`
+and nothing called it), a shell injection via `${{ inputs.tag }}` interpolated
+into bash source, per-leg "latest" resolution that could certify a set of
+binaries that never existed as one release, and an `ASK_MS` bound smaller than
+the script's own downstream budget (bogus timeouts on a healthy relay). All fixed.
+
+Still NOT covered, deliberately: CI runners are clean rooms. No antivirus, no
+corporate proxy, no real human. See the AV/signing item below.
+
 ### ✅ v0.2.0 shipped (2026-07-27) — the release that made onboarding real
 The bottleneck was never the code: it was that **the published artifact was not
 the working code.** v0.1.0 (2026-07-05) predated the hosted relay, the DoS
