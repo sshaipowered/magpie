@@ -261,13 +261,21 @@ through `sb_resolve`. 215 tests green (141 TS + 74 Rust).
       needs no Node at all. Scope `@magpie` is free (E404 on registry); packages
       are not `private`; still needs `files` fields + an npm login + publish
       order (protocol → client → mcp).
-- [ ] **`MAGPIE_EXTENSION` is a hard requirement and the server exits if it is
-      missing** — found while smoke-testing v0.2.0. Harmless on the installer
-      path (it always sets `@$(whoami)/main`), but anyone registering the MCP by
-      hand (the Antigravity snippet we print) gets an immediate exit whose
-      stderr most MCP hosts swallow, i.e. "server failed to start" with no clue.
-      Default it to `@<os-user>/main` like the installer does, and keep the
-      error only for a malformed value.
+- [x] **`MAGPIE_EXTENSION` no longer required (v0.2.1, 2026-07-28).** Found
+      while smoke-testing v0.2.0: the MCP exited 1 when it was unset, and MCP
+      hosts swallow stderr, so operators saw an unexplained "server failed to
+      start". Worse, the assumption that the installer path was safe was wrong
+      — it set `@$(whoami)/main` with NO sanitization, and EXTENSION_RE is
+      strict (lowercase alphanumerics + hyphens, since these ids reach the
+      filesystem), so "Sang Hoon" / "John.Doe" / "CORP\alice" produced an
+      address the MCP then rejected. **Both the manual and the installer path
+      were broken for those users**; the installer just failed one step later.
+      Now one tested derivation (`default-extension.ts`): sanitize the OS
+      username, fall back to `@agent/main`, and let the installers stop writing
+      the variable rather than reimplementing the rules in sh and PowerShell.
+      An explicit value is still verbatim and still fails loudly if malformed.
+      Verified on the released artifact with a truly empty env:
+      `ready as @user/main (derived)`. +15 tests.
 - Dropped: cloud "Deploy" button (not core); relay connect-token (only matters for
   public-internet exposure — revisit then, with the DoS caps).
 
