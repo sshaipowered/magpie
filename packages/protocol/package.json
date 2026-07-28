@@ -1,6 +1,6 @@
 {
   "name": "@magpie/protocol",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "Shared contract for Magpie: message schema, pairing/handshake, and security primitives.",
   "license": "MIT",
   "type": "module",
