@@ -24,15 +24,16 @@ if ($userPath -notlike "*$dir*") {
   Write-Host "→ added $dir to PATH (restart your terminal)"
 }
 
-# Auto-register with Claude Code
-$ext = "@$env:USERNAME/main".ToLower()
+# Auto-register with Claude Code. No MAGPIE_EXTENSION is written: magpie-mcp
+# derives @<os-user>/main and sanitizes the name first, which matters more on
+# Windows than anywhere else (domain logins arrive as "CORP\alice").
 if (Get-Command claude -ErrorAction SilentlyContinue) {
   # native commands do not throw on non-zero exit here, so test $LASTEXITCODE
   $exists = $false
   try { claude mcp get magpie *> $null; $exists = ($LASTEXITCODE -eq 0) } catch { $exists = $false }
   if (-not $exists) {
-    claude mcp add magpie --scope user -e MAGPIE_EXTENSION=$ext -- (Join-Path $dir "magpie-mcp.exe")
-    Write-Host "→ Claude Code: registered magpie MCP (extension $ext)"
+    claude mcp add magpie --scope user -- (Join-Path $dir "magpie-mcp.exe")
+    Write-Host "→ Claude Code: registered magpie MCP"
   } else {
     Write-Host "→ Claude Code: magpie MCP already registered"
   }

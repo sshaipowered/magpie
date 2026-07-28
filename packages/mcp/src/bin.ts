@@ -2,6 +2,7 @@
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { createMagpieMcp } from './server.js';
 import { resolveDefaultRelay } from './relay-pointer.js';
+import { resolveExtension } from './default-extension.js';
 
 /**
  * Magpie MCP stdio entrypoint.
@@ -18,19 +19,19 @@ import { resolveDefaultRelay } from './relay-pointer.js';
  *   relay config at all. Set it to pin a self-hosted relay.
  * - MAGPIE_RELAY_POINTER : override the pointer URL, or set to '' to disable
  *   the hosted default (invite-only). OPTIONAL.
- * - MAGPIE_EXTENSION  : this endpoint's address `@owner/role` (required).
+ * - MAGPIE_EXTENSION  : this endpoint's address `@owner/role`. OPTIONAL — when
+ *   unset it is derived as `@<os-user>/main` (see default-extension.ts). Set it
+ *   to pick a role, e.g. `@alice/impl`.
+ * - MAGPIE_DEFAULT_OWNER : override just the derived owner half. OPTIONAL.
  * - MAGPIE_ASK_TIMEOUT_MS : optional override for how long sb_ask waits.
  *
  * IMPORTANT: stdout is the MCP transport — never write logs there. Diagnostics
  * go to stderr only.
  */
 async function main(): Promise<void> {
-  const extension = process.env.MAGPIE_EXTENSION;
-
-  if (!extension) {
-    process.stderr.write('[magpie-mcp] MAGPIE_EXTENSION is required (e.g. @alice/impl)\n');
-    process.exit(1);
-  }
+  // Unset is NOT fatal: MCP hosts swallow stderr, so exiting here surfaced to
+  // the operator as an unexplained "server failed to start".
+  const { extension, derived } = resolveExtension(process.env);
 
   // Resolve the default relay: explicit env wins, else the hosted pointer file.
   // Never throws — an unreachable pointer degrades to invite-only mode.
@@ -57,6 +58,15 @@ async function main(): Promise<void> {
     process.stderr.write(
       `[magpie-mcp] bad config: ${err instanceof Error ? err.message : String(err)}\n`,
     );
+    if (!derived) {
+      // The only knob that can land here is a hand-written MAGPIE_EXTENSION, and
+      // the host may not show stderr, so spell out the accepted shape.
+      process.stderr.write(
+        `[magpie-mcp] MAGPIE_EXTENSION=${JSON.stringify(process.env.MAGPIE_EXTENSION)} — ` +
+          'expected @owner/role, lowercase letters/digits/hyphens only (e.g. @alice/impl). ' +
+          'Unset it to use the derived default.\n',
+      );
+    }
     process.exit(1);
     return;
   }
@@ -64,7 +74,7 @@ async function main(): Promise<void> {
   const transport = new StdioServerTransport();
   await mcp.server.connect(transport);
   process.stderr.write(
-    `[magpie-mcp] ready as ${extension} via ${relayUrl || '(no default relay — join with a full invite, or pass relayUrl to sb_start)'} (stdio)\n`,
+    `[magpie-mcp] ready as ${extension}${derived ? ' (derived; set MAGPIE_EXTENSION to change)' : ''} via ${relayUrl || '(no default relay — join with a full invite, or pass relayUrl to sb_start)'} (stdio)\n`,
   );
 
   const shutdown = (sig: string) => {

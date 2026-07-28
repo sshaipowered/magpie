@@ -49,15 +49,19 @@ case ":$PATH:" in
 esac
 
 # --- auto-register the MCP server with detected agents ------------------------
-ext="@$(whoami)/main"
+# No MAGPIE_EXTENSION is written: magpie-mcp derives @<os-user>/main itself, and
+# it sanitizes the username first. This script used to pass "@$(whoami)/main"
+# straight through, which produced an address the MCP then rejected for anyone
+# whose account name has a capital, a space, or a dot ("Sang Hoon", "John.Doe").
+# Deriving in one tested place beats reimplementing that here.
 
 if command -v claude >/dev/null 2>&1; then
   if claude mcp get magpie >/dev/null 2>&1; then
     echo "→ Claude Code: magpie MCP already registered"
   else
-    claude mcp add magpie --scope user -e MAGPIE_EXTENSION="$ext" -- "$INSTALL_DIR/magpie-mcp" \
-      && echo "→ Claude Code: registered magpie MCP (extension $ext)" \
-      || echo "! Claude Code: auto-register failed — run: claude mcp add magpie -e MAGPIE_EXTENSION=$ext -- $INSTALL_DIR/magpie-mcp"
+    claude mcp add magpie --scope user -- "$INSTALL_DIR/magpie-mcp" \
+      && echo "→ Claude Code: registered magpie MCP" \
+      || echo "! Claude Code: auto-register failed — run: claude mcp add magpie -- $INSTALL_DIR/magpie-mcp"
   fi
 fi
 
@@ -69,9 +73,8 @@ if [ -f "$HOME/.codex/config.toml" ]; then
 
 [mcp_servers.magpie]
 command = "$INSTALL_DIR/magpie-mcp"
-env = { MAGPIE_EXTENSION = "$ext" }
 EOF
-    echo "→ Codex: registered magpie MCP (extension $ext)"
+    echo "→ Codex: registered magpie MCP"
   fi
 fi
 
@@ -89,4 +92,7 @@ echo "Prefer your own relay?  run  magpie-relay  and set"
 echo "  MAGPIE_RELAY_URL=ws://<your-host>:8787   (optional — overrides the default)"
 echo ""
 echo "Other agents (Antigravity, …): register the MCP command manually:"
-echo "  $INSTALL_DIR/magpie-mcp   (env: MAGPIE_EXTENSION=$ext)"
+echo "  $INSTALL_DIR/magpie-mcp   (no env needed)"
+echo ""
+echo "Your agent's address defaults to @<your-username>/main."
+echo "Set MAGPIE_EXTENSION=@you/role to pick a different one."

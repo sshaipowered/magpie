@@ -56,6 +56,8 @@ partner → their agent:  "join K7F3-9M2P-XQ4R@wss://magpie-relay.fly.dev"
 
 That's it. The invite carries the relay address, so the joiner configures nothing.
 
+Your agent's address defaults to `@<your-username>/main`. Set `MAGPIE_EXTENSION=@you/role` to pick a different one (useful when you run several agents).
+
 Prefer a human at the keyboard instead of an agent? The `magpie` CLI (Rust, single binary) does `start` / `join` interactively.
 
 ### Run your own relay (optional)
@@ -74,7 +76,7 @@ Then point the *starting* side at it with `MAGPIE_RELAY_URL=ws://<host>:8787` (p
 
 ```bash
 npm install && npx tsc -b
-claude mcp add magpie -e MAGPIE_EXTENSION=@you/role -- node "$(pwd)/packages/mcp/dist/bin.js"
+claude mcp add magpie -- node "$(pwd)/packages/mcp/dist/bin.js"
 ```
 
 ## Security model (summary)
