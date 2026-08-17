@@ -289,6 +289,21 @@ jobs:
           }
           Write-Host "served install.ps1 parses clean"
 
+      # BEFORE the installer runs, not after. Auto-registration is guarded by
+      # `command -v` / `Get-Command`, so on a bare runner every registration
+      # branch is skipped and the installer proves only that it parses. That is
+      # the exact state the last Windows-only installer bug survived in for
+      # weeks. Installing a real host first makes that code actually execute.
+      - uses: actions/setup-node@v4
+        with: { node-version: 22 }
+
+      - name: Install a real MCP host to register against
+        shell: bash
+        # Gemini CLI is the third-party host magpie has a live cross-vendor call
+        # verified against. No API key is needed: `mcp add` / `mcp list` are
+        # local config operations and never reach a model.
+        run: npm i -g @google/gemini-cli@0.55.1
+
       - name: Run the advertised one-liner (windows)
         if: runner.os == 'Windows'
         shell: powershell
@@ -307,6 +322,37 @@ jobs:
           curl -fsSL https://ssh-ai.github.io/magpie/install.sh | sh
           test -x "$HOME/.magpie/bin/magpie"
           "$HOME/.magpie/bin/magpie" --version
+
+      # Assert against the config file, not `gemini mcp list`: the list output
+      # reports a correctly registered server as "Disabled" whenever the folder
+      # is untrusted, so it cannot distinguish "not registered" from "gated".
+      # The user-scope settings file is what the installer is responsible for.
+      - name: The installer actually registered the MCP server
+        shell: bash
+        run: |
+          set -euo pipefail
+          cfg="$HOME/.gemini/settings.json"
+          test -f "$cfg" || { echo "installer never wrote $cfg" >&2; exit 1; }
+          node -e '
+            const fs = require("fs");
+            const cfg = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
+            const s = cfg.mcpServers && cfg.mcpServers.magpie;
+            if (!s) { console.error("magpie missing from mcpServers"); process.exit(1); }
+            // A registration pointing at a path that does not exist would still
+            // look correct in the file and fail for every user on first call.
+            if (!fs.existsSync(s.command)) {
+              console.error("registered command does not exist: " + s.command);
+              process.exit(1);
+            }
+            // MAGPIE_EXTENSION must stay unset so magpie-mcp derives and
+            // sanitizes the address itself (v0.2.1). Writing it here is what
+            // broke every user whose account name had a capital or a space.
+            if (s.env && s.env.MAGPIE_EXTENSION) {
+              console.error("installer wrote MAGPIE_EXTENSION; derivation is bypassed");
+              process.exit(1);
+            }
+            console.log("registered -> " + s.command);
+          ' "$cfg"
 
   # With fail-fast:false a single red leg can still read as an ambiguous overall
   # result. This collapses the matrix into one unambiguous verdict for the
