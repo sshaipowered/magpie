@@ -1,16 +1,23 @@
-# Magpie installer (Windows) — no Node/npm/docker required.
+# Magpie installer (Windows) - no Node/npm/docker required.
 #
 #   irm https://ssh-ai.github.io/magpie/install.ps1 | iex
 #
 # Installs magpie binaries to ~\.magpie\bin and registers the MCP server with
-# Claude Code if present.
+# Claude Code, Codex and Gemini CLI if present.
+#
+# KEEP THIS FILE PURE ASCII. Pages serves it as application/octet-stream with
+# no charset and no BOM, so Windows PowerShell 5.1 — what `irm | iex` runs on a
+# default Windows box — decodes it with the machine's ANSI codepage. Under that
+# decode a UTF-8 em dash turns into bytes that terminate a string early, and the
+# whole script fails to parse. The failure is total, not cosmetic: no install at
+# all. CI enforces this.
 $ErrorActionPreference = "Stop"
 
 $repo = "ssh-ai/magpie"
 $dir  = Join-Path $HOME ".magpie\bin"
 $url  = "https://github.com/$repo/releases/latest/download/magpie-windows-x64.zip"
 
-Write-Host "→ installing magpie (windows-x64) to $dir"
+Write-Host "-> installing magpie (windows-x64) to $dir"
 New-Item -ItemType Directory -Force -Path $dir | Out-Null
 $zip = Join-Path $env:TEMP "magpie.zip"
 Invoke-WebRequest -Uri $url -OutFile $zip
@@ -21,7 +28,7 @@ Remove-Item $zip
 $userPath = [Environment]::GetEnvironmentVariable("Path", "User")
 if ($userPath -notlike "*$dir*") {
   [Environment]::SetEnvironmentVariable("Path", "$dir;$userPath", "User")
-  Write-Host "→ added $dir to PATH (restart your terminal)"
+  Write-Host "-> added $dir to PATH (restart your terminal)"
 }
 
 # Auto-register with Claude Code. No MAGPIE_EXTENSION is written: magpie-mcp
@@ -33,9 +40,9 @@ if (Get-Command claude -ErrorAction SilentlyContinue) {
   try { claude mcp get magpie *> $null; $exists = ($LASTEXITCODE -eq 0) } catch { $exists = $false }
   if (-not $exists) {
     claude mcp add magpie --scope user -- (Join-Path $dir "magpie-mcp.exe")
-    Write-Host "→ Claude Code: registered magpie MCP"
+    Write-Host "-> Claude Code: registered magpie MCP"
   } else {
-    Write-Host "→ Claude Code: magpie MCP already registered"
+    Write-Host "-> Claude Code: magpie MCP already registered"
   }
 }
 
@@ -51,7 +58,7 @@ function Invoke-Register([string]$label, [scriptblock]$call, [string]$manual) {
   $script:LASTEXITCODE = 1
   try { & $call *> $null } catch { }
   if ($LASTEXITCODE -eq 0) { return $true }
-  Write-Host "! ${label}: auto-register failed — run: $manual"
+  Write-Host "! ${label}: auto-register failed - run: $manual"
   return $false
 }
 
@@ -59,9 +66,9 @@ if (Get-Command codex -ErrorAction SilentlyContinue) {
   $script:LASTEXITCODE = 1
   try { codex mcp get magpie *> $null } catch { }
   if ($LASTEXITCODE -eq 0) {
-    Write-Host "→ Codex: magpie MCP already registered"
+    Write-Host "-> Codex: magpie MCP already registered"
   } elseif (Invoke-Register "Codex" { codex mcp add magpie -- $mcpExe } "codex mcp add magpie -- $mcpExe") {
-    Write-Host "→ Codex: registered magpie MCP"
+    Write-Host "-> Codex: registered magpie MCP"
   }
 }
 
@@ -69,15 +76,15 @@ if (Get-Command codex -ErrorAction SilentlyContinue) {
 # registration into whatever directory this script was piped into.
 if (Get-Command gemini -ErrorAction SilentlyContinue) {
   if (Invoke-Register "Gemini CLI" { gemini mcp add -s user magpie $mcpExe } "gemini mcp add -s user magpie $mcpExe") {
-    Write-Host "→ Gemini CLI: magpie MCP registered"
+    Write-Host "-> Gemini CLI: magpie MCP registered"
     # Gemini's folder-trust gate reports the server as "Disabled" without ever
     # saying trust is why. Their setting to flip, ours to name.
-    Write-Host "  (lists as Disabled? that is Gemini's folder-trust gate — trust the folder)"
+    Write-Host "  (lists as Disabled? that is Gemini's folder-trust gate - trust the folder)"
   }
 }
 
 Write-Host ""
-Write-Host "✅ magpie installed."
+Write-Host "OK: magpie installed."
 Write-Host "Nothing else to set up. A hosted relay is the default, and it brokers"
 Write-Host "ciphertext only, so it can never read your code or messages."
 Write-Host ""

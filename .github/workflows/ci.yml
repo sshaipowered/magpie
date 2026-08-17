@@ -38,6 +38,21 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # install.ps1 must stay pure ASCII. Pages serves it as
+      # application/octet-stream with no charset and no BOM, so Windows
+      # PowerShell 5.1 decodes it with the machine's ANSI codepage: a UTF-8 em
+      # dash becomes bytes that terminate a string early and the script stops
+      # parsing entirely. Checked on Linux because grep -P is not on the Windows
+      # image, and the property is about the file, not the platform.
+      - name: install.ps1 is pure ASCII
+        if: runner.os != 'Windows'
+        run: |
+          if LC_ALL=C grep -nP '[^\x00-\x7F]' scripts/install.ps1; then
+            echo "^^ non-ASCII in install.ps1 — this breaks the script under Windows PowerShell 5.1" >&2
+            exit 1
+          fi
+          echo "install.ps1 is pure ASCII"
+
       - name: shellcheck install.sh
         if: runner.os != 'Windows'
         # -s sh, not bash: the script declares #!/bin/sh and is piped to `sh`,
