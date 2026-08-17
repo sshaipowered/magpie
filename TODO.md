@@ -252,6 +252,73 @@ the script's own downstream budget (bogus timeouts on a healthy relay). All fixe
 Still NOT covered, deliberately: CI runners are clean rooms. No antivirus, no
 corporate proxy, no real human. See the AV/signing item below.
 
+**Correction (2026-08-17): that "first run PASS" was the dispatch path only.
+The nightly had failed 20 of 20 runs and nobody was told.** The scheduled leg
+pinned its checkout to the release tag, which conflated the release artifact
+with the test harness — the binaries are versioned and downloaded by tag, but
+`scripts/smoke.mjs` lives with the repo and was committed the day *after*
+v0.2.1 was cut. Every cron checked out a tree with no driver and died on
+MODULE_NOT_FOUND before reaching the relay. The OS-axis result stands (the
+dispatch runs were real), but the watchdog never ran a single day.
+
+Both halves fixed: checkout is no longer tag-pinned, and a red nightly now
+opens one GitHub issue and closes it on recovery. **A watchdog whose alarm goes
+nowhere is not a watchdog** — 20 consecutive failures produced zero signal for
+20 days.
+
+### ✅ Cross-harness + front door measured (2026-08-17)
+Two things were assumed and are now measured.
+
+**Cross-harness.** Compatibility risk lives in the host's MCP client, not the
+model, so it is testable without any API key. The released v0.2.1 binary
+negotiates every protocol version from `2024-10-07` through `2025-11-25`,
+downgrades a future `2026-06-18` cleanly, serves all 7 tools with valid object
+schemas, and answers `tools/list` even when the host skips
+`notifications/initialized`. Gemini CLI 0.50.0 and Codex 0.144.1 both connect
+to the shipped binary. Codex's live model leg stays blocked by a free-tier
+OpenAI account — a plan limit, not a Magpie limit.
+
+**Front door.** Every existing leg downloaded the release archive by hand,
+which no user does. The README says to pipe a script off Pages into a shell and
+**nothing had ever run that path.** It was broken on Windows:
+
+- Pages serves `install.ps1` as `application/octet-stream`, no charset, no BOM.
+  Windows PowerShell 5.1 — what `irm | iex` runs on a default box — decoded it
+  with the ANSI codepage, so a UTF-8 em dash inside a double-quoted string
+  terminated it early and the script stopped parsing. Not degraded: **no
+  install at all**, and invisible from macOS. Pages sets no headers we control,
+  so pure ASCII is the only fix available. CI enforces it.
+- Registration reported failure unconditionally. `$LASTEXITCODE` is a *global*
+  automatic variable; seeding `$script:LASTEXITCODE` created a shadow that
+  native commands never update. Now judged by outcome — read the config the CLI
+  was told to write — which also survives npm `.cmd` shims.
+- A successful install leaked a non-zero `$LASTEXITCODE` to its caller.
+
+The installer also now registers Codex and Gemini CLI on both platforms, via
+each CLI's own idempotent `mcp add` rather than by appending to its config.
+That fixed a silent skip: Codex registration was gated on an existing
+`~/.codex/config.toml`, so anyone who installed Codex but never launched it got
+a binary their agent could not reach.
+
+Lesson, twice over: **parse-verified is not verified.** Every registration
+branch is guarded by `command -v`, so on a bare runner all of them are skipped
+and the test proves only that the file parses. CI now installs a real MCP host
+first, then asserts the written config points at a path that exists and that
+`MAGPIE_EXTENSION` was NOT written (the v0.2.1 derivation must own the address).
+
+### ✅ Contributor-ready (2026-08-17)
+`SECURITY.md` (private reporting enabled, known trade-offs listed so nobody
+rediscovers a documented one), `CONTRIBUTING.md`, `CODEOWNERS`, branch
+protection on `main` requiring all four CI checks, secret scanning + push
+protection on.
+
+Note the premise this did NOT rest on: the repo's one star came from an account
+that has starred six other repos named "magpie" plus one named "raven". It is a
+name collection, not product interest — and traffic shows **1 unique visitor in
+14 days**, with the clone count fully explained by our own cron. The disclosure
+channel is worth having regardless of who is watching; the rest is not a
+distribution strategy.
+
 ### ✅ v0.2.0 shipped (2026-07-27) — the release that made onboarding real
 The bottleneck was never the code: it was that **the published artifact was not
 the working code.** v0.1.0 (2026-07-05) predated the hosted relay, the DoS
