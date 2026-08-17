@@ -8,6 +8,10 @@ on:
 
 permissions:
   contents: write
+  # smoke.yml declares a job needing issues:write. A called workflow may only
+  # ask for permissions the caller already holds, so this must be granted here
+  # even though that job never runs on the release path (it is schedule-gated).
+  issues: write
 
 jobs:
   build:

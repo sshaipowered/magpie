@@ -138,14 +138,15 @@ jobs:
     # exactly the behaviour under test.
     timeout-minutes: 20
     steps:
-      # On a tag push (the release path) `github.ref` is already the tag, so the
-      # default checkout is version-locked to the binaries under test. The cron
-      # is the exception: it runs on main, and a driver that has moved ahead of
-      # the last release would fail on the drift rather than on the relay it is
-      # meant to watch. Pin that case to the tag. An empty ref means "default".
+      # ALWAYS the default ref. This used to pin the scheduled run to the
+      # release tag, reasoning that a driver ahead of the last release would
+      # fail on its own drift. That conflated two different things: the
+      # BINARIES are the release artifact and are downloaded by tag below, but
+      # scripts/smoke.mjs is test infrastructure that lives with the repo. It
+      # was committed the day AFTER v0.2.1 was cut, so pinning to the tag
+      # checked out a tree with no driver in it, and every one of the first 20
+      # scheduled runs died on MODULE_NOT_FOUND without ever reaching the relay.
       - uses: actions/checkout@v4
-        with:
-          ref: ${{ github.event_name == 'schedule' && needs.resolve.outputs.tag || '' }}
 
       - name: Download and extract the release archive (unix)
         if: runner.os != 'Windows'
@@ -261,24 +262,32 @@ jobs:
       # `shell: powershell` is Windows PowerShell 5.1 on purpose. pwsh 7 is not
       # what a default Windows box runs, and the two decode downloaded text
       # differently — testing only pwsh would prove nothing about real users.
-      - name: How does PowerShell 5.1 actually decode the served script?
+      # Parse the exact string `iex` would evaluate. Counting suspicious
+      # characters only guesses; handing the downloaded text to the same parser
+      # answers the actual question. A first attempt here also checked the body
+      # with Invoke-WebRequest, which throws NullReferenceException on 5.1
+      # without -UseBasicParsing — the probe failed on its own bug and told us
+      # nothing about the product.
+      - name: Does the served install.ps1 parse under Windows PowerShell 5.1?
         if: runner.os == 'Windows'
         shell: powershell
         run: |
           $r = Invoke-RestMethod https://ssh-ai.github.io/magpie/install.ps1
           Write-Host "irm returned: $($r.GetType().FullName)"
           if ($r -isnot [string]) {
-            Write-Host "NOT A STRING -- `irm | iex` cannot work with this Content-Type"
+            Write-Host "NOT A STRING - iex cannot evaluate this"
             exit 1
           }
-          # Mojibake shows up as a decoded string that no longer round-trips to
-          # the bytes on the wire. Compare against a UTF-8 decode of the raw body.
-          $raw  = (Invoke-WebRequest https://ssh-ai.github.io/magpie/install.ps1).Content
           $nonAscii = ([regex]::Matches($r, '[^\x00-\x7F]')).Count
           Write-Host "non-ASCII chars after decode: $nonAscii"
-          if ($nonAscii -gt 0) {
-            Write-Host "sample: $(($r -split "`n" | Where-Object { $_ -match '[^\x00-\x7F]' } | Select-Object -First 3) -join ' | ')"
+          $errs = $null
+          [void][System.Management.Automation.Language.Parser]::ParseInput($r, [ref]$null, [ref]$errs)
+          if ($errs) {
+            Write-Host "the script served to users does not parse on a default Windows box:"
+            $errs | ForEach-Object { Write-Host "  $($_.Message)" }
+            exit 1
           }
+          Write-Host "served install.ps1 parses clean"
 
       - name: Run the advertised one-liner (windows)
         if: runner.os == 'Windows'
@@ -318,3 +327,51 @@ jobs:
           echo "smoke matrix: ${{ needs.smoke.result }}"
           echo "front door:   ${{ needs.frontdoor.result }}"
           [ "${{ needs.smoke.result }}" = "success" ] && [ "${{ needs.frontdoor.result }}" = "success" ]
+
+  # The first 20 scheduled runs all failed, and nobody noticed for 20 days,
+  # because a red cron produces no notification anyone reads. A watchdog whose
+  # alarm goes nowhere is not a watchdog. This turns the result into an issue —
+  # exactly one, opened when it breaks and closed when it recovers, so a long
+  # outage does not become 30 identical comments.
+  #
+  # Schedule only. On the release path the red gate is already blocking and
+  # someone is by definition watching.
+  watchdog:
+    needs: [smoke, frontdoor]
+    if: always() && github.event_name == 'schedule'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      issues: write
+    steps:
+      - name: Report or clear the nightly result
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          SMOKE: ${{ needs.smoke.result }}
+          FRONTDOOR: ${{ needs.frontdoor.result }}
+        run: |
+          set -euo pipefail
+          open=$(gh issue list --repo "$REPO" --state open --label watchdog \
+                   --json number --jq '.[0].number // empty')
+
+          if [ "$SMOKE" = "success" ] && [ "$FRONTDOOR" = "success" ]; then
+            if [ -n "$open" ]; then
+              gh issue close "$open" --repo "$REPO" \
+                --comment "Recovered: nightly smoke is green again. $RUN_URL"
+              echo "closed #$open"
+            else
+              echo "green, nothing open"
+            fi
+            exit 0
+          fi
+
+          if [ -n "$open" ]; then
+            echo "already reported in #$open — not commenting again"
+            exit 0
+          fi
+
+          gh issue create --repo "$REPO" --label watchdog \
+            --title "Nightly smoke is failing" \
+            --body "$(printf 'The scheduled smoke run went red against the current release.\n\n- released-binary matrix: **%s**\n- install one-liner (front door): **%s**\n\n%s\n\nThe binaries under test did not change, so a failure here means the hosted relay, the relay pointer, or the published install script moved. This issue closes itself when a later nightly comes back green.' "$SMOKE" "$FRONTDOOR" "$RUN_URL")"
