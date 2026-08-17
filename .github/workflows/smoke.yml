@@ -243,18 +243,78 @@ jobs:
           set -euo pipefail
           node scripts/smoke.mjs "bin/magpie-mcp${{ matrix.exe }}"
 
+  # Everything above downloads the release archive by hand. NOBODY does that —
+  # the README tells people to pipe a script off Pages into their shell, and
+  # that path has never been executed by anything. It is also the path with the
+  # most ways to break silently: Pages serves install.ps1 as
+  # application/octet-stream with no charset and no BOM, so how Windows
+  # PowerShell 5.1 decodes it is a property of the HOST, invisible from here.
+  frontdoor:
+    needs: resolve
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [macos-14, ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 15
+    steps:
+      # `shell: powershell` is Windows PowerShell 5.1 on purpose. pwsh 7 is not
+      # what a default Windows box runs, and the two decode downloaded text
+      # differently — testing only pwsh would prove nothing about real users.
+      - name: How does PowerShell 5.1 actually decode the served script?
+        if: runner.os == 'Windows'
+        shell: powershell
+        run: |
+          $r = Invoke-RestMethod https://ssh-ai.github.io/magpie/install.ps1
+          Write-Host "irm returned: $($r.GetType().FullName)"
+          if ($r -isnot [string]) {
+            Write-Host "NOT A STRING -- `irm | iex` cannot work with this Content-Type"
+            exit 1
+          }
+          # Mojibake shows up as a decoded string that no longer round-trips to
+          # the bytes on the wire. Compare against a UTF-8 decode of the raw body.
+          $raw  = (Invoke-WebRequest https://ssh-ai.github.io/magpie/install.ps1).Content
+          $nonAscii = ([regex]::Matches($r, '[^\x00-\x7F]')).Count
+          Write-Host "non-ASCII chars after decode: $nonAscii"
+          if ($nonAscii -gt 0) {
+            Write-Host "sample: $(($r -split "`n" | Where-Object { $_ -match '[^\x00-\x7F]' } | Select-Object -First 3) -join ' | ')"
+          }
+
+      - name: Run the advertised one-liner (windows)
+        if: runner.os == 'Windows'
+        shell: powershell
+        run: |
+          irm https://ssh-ai.github.io/magpie/install.ps1 | iex
+          if ($LASTEXITCODE -ne 0 -and $null -ne $LASTEXITCODE) { throw "installer exited $LASTEXITCODE" }
+          $exe = Join-Path $HOME ".magpie\bin\magpie.exe"
+          if (-not (Test-Path $exe)) { throw "installer finished but $exe is missing" }
+          & $exe --version
+
+      - name: Run the advertised one-liner (unix)
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl -fsSL https://ssh-ai.github.io/magpie/install.sh | sh
+          test -x "$HOME/.magpie/bin/magpie"
+          "$HOME/.magpie/bin/magpie" --version
+
   # With fail-fast:false a single red leg can still read as an ambiguous overall
   # result. This collapses the matrix into one unambiguous verdict for the
   # release run that calls this workflow. It is not a PR gate: there is no
   # pull_request trigger, so requiring it as a status check would hang every PR
   # forever.
   gate:
-    needs: smoke
+    needs: [smoke, frontdoor]
     if: always()
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
+      # frontdoor is gated too, deliberately. Binaries that work but cannot be
+      # installed are not a shippable release, and leaving a check unwired is
+      # how the smoke workflow itself sat as dead code until someone looked.
       - name: Require every platform to pass
         run: |
-          echo "smoke matrix result: ${{ needs.smoke.result }}"
-          [ "${{ needs.smoke.result }}" = "success" ]
+          echo "smoke matrix: ${{ needs.smoke.result }}"
+          echo "front door:   ${{ needs.frontdoor.result }}"
+          [ "${{ needs.smoke.result }}" = "success" ] && [ "${{ needs.frontdoor.result }}" = "success" ]
