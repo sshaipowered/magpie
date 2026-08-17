@@ -6,11 +6,15 @@
 # Claude Code, Codex and Gemini CLI if present.
 #
 # KEEP THIS FILE PURE ASCII. Pages serves it as application/octet-stream with
-# no charset and no BOM, so Windows PowerShell 5.1 — what `irm | iex` runs on a
-# default Windows box — decodes it with the machine's ANSI codepage. Under that
-# decode a UTF-8 em dash turns into bytes that terminate a string early, and the
-# whole script fails to parse. The failure is total, not cosmetic: no install at
-# all. CI enforces this.
+# no charset and no BOM, so Windows PowerShell 5.1 (what `irm | iex` runs on a
+# default Windows box) decodes it with the machine's ANSI codepage. Under that
+# decode a UTF-8 em dash inside a double-quoted string becomes bytes that
+# terminate the string early and the whole script stops parsing. That is not a
+# cosmetic defect, it is no install at all, and macOS cannot see it because
+# every other platform decodes the file as UTF-8.
+#
+# Only string literals are actually fatal, but "non-ASCII is fine in comments"
+# is a rule nobody remembers at 2am. CI enforces the whole file.
 $ErrorActionPreference = "Stop"
 
 $repo = "ssh-ai/magpie"
