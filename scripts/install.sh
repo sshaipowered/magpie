@@ -4,8 +4,8 @@
 #   curl -fsSL https://ssh-ai.github.io/magpie/install.sh | sh
 #
 # Installs the magpie binaries (CLI, relay, MCP server — all standalone) into
-# ~/.magpie/bin and auto-registers the MCP server with any agents it can detect
-# (Claude Code today; prints snippets for Codex / Antigravity).
+# ~/.magpie/bin and auto-registers the MCP server with every agent it can detect
+# (Claude Code, Codex, Gemini CLI; prints the command to paste for the rest).
 set -eu
 
 REPO="ssh-ai/magpie"
@@ -54,6 +54,11 @@ esac
 # straight through, which produced an address the MCP then rejected for anyone
 # whose account name has a capital, a space, or a dot ("Sang Hoon", "John.Doe").
 # Deriving in one tested place beats reimplementing that here.
+#
+# Every host is registered through its own `mcp add` subcommand rather than by
+# editing its config file. Hand-editing gated Codex behind an existing
+# ~/.codex/config.toml, so anyone who had installed Codex but never launched it
+# got silently skipped. All three commands are idempotent.
 
 if command -v claude >/dev/null 2>&1; then
   if claude mcp get magpie >/dev/null 2>&1; then
@@ -65,16 +70,29 @@ if command -v claude >/dev/null 2>&1; then
   fi
 fi
 
-if [ -f "$HOME/.codex/config.toml" ]; then
-  if grep -qs "mcp_servers.magpie" "$HOME/.codex/config.toml"; then
+if command -v codex >/dev/null 2>&1; then
+  if codex mcp get magpie >/dev/null 2>&1; then
     echo "→ Codex: magpie MCP already registered"
   else
-    cat >> "$HOME/.codex/config.toml" <<EOF
+    codex mcp add magpie -- "$INSTALL_DIR/magpie-mcp" >/dev/null 2>&1 \
+      && echo "→ Codex: registered magpie MCP" \
+      || echo "! Codex: auto-register failed — run: codex mcp add magpie -- $INSTALL_DIR/magpie-mcp"
+  fi
+fi
 
-[mcp_servers.magpie]
-command = "$INSTALL_DIR/magpie-mcp"
-EOF
-    echo "→ Codex: registered magpie MCP"
+# Gemini CLI is the one third-party host magpie has been verified against on a
+# live cross-vendor call, so leaving it out of auto-registration was backwards.
+# `-s user` is mandatory: `gemini mcp add` defaults to PROJECT scope and would
+# otherwise bury the registration in whatever directory this script ran from.
+if command -v gemini >/dev/null 2>&1; then
+  if gemini mcp add -s user magpie "$INSTALL_DIR/magpie-mcp" >/dev/null 2>&1; then
+    echo "→ Gemini CLI: magpie MCP registered"
+    # Gemini gates MCP servers behind folder trust: in an untrusted directory it
+    # lists magpie as "Disabled" and never says trust is the reason. That is
+    # their security setting, not ours to flip — so name it instead.
+    echo "  (lists as Disabled? that is Gemini's folder-trust gate — trust the folder)"
+  else
+    echo "! Gemini CLI: auto-register failed — run: gemini mcp add -s user magpie $INSTALL_DIR/magpie-mcp"
   fi
 fi
 

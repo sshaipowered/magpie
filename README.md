@@ -43,7 +43,9 @@ curl -fsSL https://ssh-ai.github.io/magpie/install.sh | sh     # macOS / Linux
 irm https://ssh-ai.github.io/magpie/install.ps1 | iex          # Windows
 ```
 
-Single static binaries (`magpie`, `magpie-relay`, `magpie-mcp`) into `~/.magpie/bin`. No Node, no Docker. The installer auto-registers the MCP server with Claude Code and Codex if it finds them; for other agents it prints the command to paste.
+Single static binaries (`magpie`, `magpie-relay`, `magpie-mcp`) into `~/.magpie/bin`. No Node, no Docker. The installer auto-registers the MCP server with **Claude Code, Codex, and Gemini CLI** if it finds them; for any other MCP host it prints the command to paste.
+
+> Gemini CLI users: Gemini gates MCP servers behind *folder trust*. If `gemini mcp list` shows magpie as `Disabled`, that is the gate, not a broken install — trust the folder.
 
 **2. Just talk to your agent:**
 

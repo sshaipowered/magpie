@@ -39,6 +39,43 @@ if (Get-Command claude -ErrorAction SilentlyContinue) {
   }
 }
 
+# Codex and Gemini were registered on Unix but not here, so a Windows user of
+# either got a working binary and no way for their agent to reach it. Both
+# expose an idempotent `mcp add`; neither needs its config file to exist first.
+$mcpExe = Join-Path $dir "magpie-mcp.exe"
+
+# Every check below reads $LASTEXITCODE, which is STALE if the call never ran.
+# Seeding it with a failure first means a throw reports failure rather than
+# inheriting whatever the previous command happened to leave behind.
+function Invoke-Register([string]$label, [scriptblock]$call, [string]$manual) {
+  $script:LASTEXITCODE = 1
+  try { & $call *> $null } catch { }
+  if ($LASTEXITCODE -eq 0) { return $true }
+  Write-Host "! ${label}: auto-register failed — run: $manual"
+  return $false
+}
+
+if (Get-Command codex -ErrorAction SilentlyContinue) {
+  $script:LASTEXITCODE = 1
+  try { codex mcp get magpie *> $null } catch { }
+  if ($LASTEXITCODE -eq 0) {
+    Write-Host "→ Codex: magpie MCP already registered"
+  } elseif (Invoke-Register "Codex" { codex mcp add magpie -- $mcpExe } "codex mcp add magpie -- $mcpExe") {
+    Write-Host "→ Codex: registered magpie MCP"
+  }
+}
+
+# -s user is mandatory: gemini defaults to PROJECT scope, which would write the
+# registration into whatever directory this script was piped into.
+if (Get-Command gemini -ErrorAction SilentlyContinue) {
+  if (Invoke-Register "Gemini CLI" { gemini mcp add -s user magpie $mcpExe } "gemini mcp add -s user magpie $mcpExe") {
+    Write-Host "→ Gemini CLI: magpie MCP registered"
+    # Gemini's folder-trust gate reports the server as "Disabled" without ever
+    # saying trust is why. Their setting to flip, ours to name.
+    Write-Host "  (lists as Disabled? that is Gemini's folder-trust gate — trust the folder)"
+  }
+}
+
 Write-Host ""
 Write-Host "✅ magpie installed."
 Write-Host "Nothing else to set up. A hosted relay is the default, and it brokers"
