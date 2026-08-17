@@ -35,52 +35,62 @@ if ($userPath -notlike "*$dir*") {
   Write-Host "-> added $dir to PATH (restart your terminal)"
 }
 
-# Auto-register with Claude Code. No MAGPIE_EXTENSION is written: magpie-mcp
-# derives @<os-user>/main and sanitizes the name first, which matters more on
-# Windows than anywhere else (domain logins arrive as "CORP\alice").
-if (Get-Command claude -ErrorAction SilentlyContinue) {
-  # native commands do not throw on non-zero exit here, so test $LASTEXITCODE
-  $exists = $false
-  try { claude mcp get magpie *> $null; $exists = ($LASTEXITCODE -eq 0) } catch { $exists = $false }
-  if (-not $exists) {
-    claude mcp add magpie --scope user -- (Join-Path $dir "magpie-mcp.exe")
-    Write-Host "-> Claude Code: registered magpie MCP"
-  } else {
-    Write-Host "-> Claude Code: magpie MCP already registered"
-  }
-}
-
+# --- auto-register the MCP server with detected agents ------------------------
+# No MAGPIE_EXTENSION is written anywhere below: magpie-mcp derives
+# @<os-user>/main and sanitizes the name itself, which matters more on Windows
+# than anywhere else (domain logins arrive as "CORP\alice").
+#
 # Codex and Gemini were registered on Unix but not here, so a Windows user of
-# either got a working binary and no way for their agent to reach it. Both
-# expose an idempotent `mcp add`; neither needs its config file to exist first.
+# either got a working binary and no way for their agent to reach it. All three
+# CLIs expose an idempotent `mcp add` and none needs its config to exist first.
 $mcpExe = Join-Path $dir "magpie-mcp.exe"
 
-# Every check below reads $LASTEXITCODE, which is STALE if the call never ran.
-# Seeding it with a failure first means a throw reports failure rather than
-# inheriting whatever the previous command happened to leave behind.
-function Invoke-Register([string]$label, [scriptblock]$call, [string]$manual) {
-  $script:LASTEXITCODE = 1
-  try { & $call *> $null } catch { }
-  if ($LASTEXITCODE -eq 0) { return $true }
+# Registration is judged by OUTCOME, never by exit code.
+#
+# An earlier version seeded $script:LASTEXITCODE before each call so a throw
+# could not inherit a stale value. That backfired: $LASTEXITCODE is a GLOBAL
+# automatic variable, so the script-scoped assignment created a shadow that
+# native commands never update, every read found the shadow still holding its
+# seeded failure value, and registration reported failure unconditionally --
+# including the runs where it had in fact succeeded.
+#
+# These CLIs also arrive as npm .cmd shims on Windows, whose exit codes do not
+# reliably survive the shim. Reading the config file the CLI was told to write
+# is ground truth and depends on none of that.
+function Register-Host([string]$label, [scriptblock]$call, [string]$config, [string]$needle, [string]$manual) {
+  $out = ''
+  try { $out = (& $call 2>&1 | Out-String) } catch { $out = $_.Exception.Message }
+  if ((Test-Path $config) -and ((Get-Content $config -Raw -ErrorAction SilentlyContinue) -match $needle)) {
+    Write-Host "-> ${label}: magpie MCP registered"
+    return $true
+  }
   Write-Host "! ${label}: auto-register failed - run: $manual"
+  # Print what the CLI said. Swallowing it is why the Unix and Windows paths
+  # diverged unnoticed for as long as they did.
+  if ($out.Trim()) {
+    foreach ($line in ($out.Trim() -split "`r?`n")) { Write-Host "  $line" }
+  }
   return $false
 }
 
+if (Get-Command claude -ErrorAction SilentlyContinue) {
+  [void](Register-Host "Claude Code" { claude mcp add magpie --scope user -- $mcpExe } `
+    (Join-Path $HOME ".claude.json") '"magpie"' "claude mcp add magpie --scope user -- $mcpExe")
+}
+
 if (Get-Command codex -ErrorAction SilentlyContinue) {
-  $script:LASTEXITCODE = 1
-  try { codex mcp get magpie *> $null } catch { }
-  if ($LASTEXITCODE -eq 0) {
-    Write-Host "-> Codex: magpie MCP already registered"
-  } elseif (Invoke-Register "Codex" { codex mcp add magpie -- $mcpExe } "codex mcp add magpie -- $mcpExe") {
-    Write-Host "-> Codex: registered magpie MCP"
-  }
+  $codexCfg = if ($env:CODEX_HOME) { Join-Path $env:CODEX_HOME "config.toml" }
+              else { Join-Path $HOME ".codex\config.toml" }
+  [void](Register-Host "Codex" { codex mcp add magpie -- $mcpExe } `
+    $codexCfg "mcp_servers\.magpie" "codex mcp add magpie -- $mcpExe")
 }
 
 # -s user is mandatory: gemini defaults to PROJECT scope, which would write the
 # registration into whatever directory this script was piped into.
 if (Get-Command gemini -ErrorAction SilentlyContinue) {
-  if (Invoke-Register "Gemini CLI" { gemini mcp add -s user magpie $mcpExe } "gemini mcp add -s user magpie $mcpExe") {
-    Write-Host "-> Gemini CLI: magpie MCP registered"
+  $geminiCfg = Join-Path $HOME ".gemini\settings.json"
+  if (Register-Host "Gemini CLI" { gemini mcp add -s user magpie $mcpExe } `
+      $geminiCfg '"magpie"' "gemini mcp add -s user magpie $mcpExe") {
     # Gemini's folder-trust gate reports the server as "Disabled" without ever
     # saying trust is why. Their setting to flip, ours to name.
     Write-Host "  (lists as Disabled? that is Gemini's folder-trust gate - trust the folder)"
@@ -96,3 +106,10 @@ Write-Host "Start a call:  tell your agent  `"start a magpie call about <topic>`
 Write-Host "Join a call:   tell your agent  `"join <invite>`""
 Write-Host ""
 Write-Host "Prefer your own relay? run  magpie-relay  and set MAGPIE_RELAY_URL"
+
+# Reaching here means every fallible step succeeded -- $ErrorActionPreference is
+# Stop, so a real failure throws long before this line. Without the reset the
+# script leaks whatever the last registration CLI happened to return, and a
+# caller that checks $LASTEXITCODE after `irm | iex` reads a successful install
+# as a failed one.
+$global:LASTEXITCODE = 0
