@@ -561,7 +561,7 @@ checksum = "0ceec5bc11778974d1bcb055b18002eba7f4b3518b6a0081b3af5f21666da9ad"
 
 [[package]]
 name = "magpie-cli"
-version = "0.2.1"
+version = "0.2.2"
 dependencies = [
  "clap",
  "magpie-client",
@@ -573,7 +573,7 @@ dependencies = [
 
 [[package]]
 name = "magpie-client"
-version = "0.2.1"
+version = "0.2.2"
 dependencies = [
  "futures-util",
  "magpie-protocol",
@@ -585,7 +585,7 @@ dependencies = [
 
 [[package]]
 name = "magpie-protocol"
-version = "0.2.1"
+version = "0.2.2"
 dependencies = [
  "aes-gcm",
  "base64",
@@ -600,7 +600,7 @@ dependencies = [
 
 [[package]]
 name = "magpie-relay"
-version = "0.2.1"
+version = "0.2.2"
 dependencies = [
  "futures-util",
  "nanoid",

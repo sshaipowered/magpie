@@ -1,6 +1,6 @@
 [package]
 name = "magpie-client"
-version = "0.2.1"
+version = "0.2.2"
 edition.workspace = true
 license.workspace = true
 description = "Magpie client — a thin async WebSocket client to the relay plus the per-call pairing crypto. Mirror of packages/client (TS reference). The relay sees ciphertext only."
