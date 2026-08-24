@@ -7,7 +7,7 @@ those are worth attacking. Reports are welcome.
 ## Reporting a vulnerability
 
 **Use GitHub's private vulnerability reporting:**
-[Report a vulnerability](https://github.com/ssh-ai/magpie/security/advisories/new)
+[Report a vulnerability](https://github.com/sshaipowered/magpie/security/advisories/new)
 
 Do not open a public issue for anything that lets someone read a call's plaintext,
 impersonate an endpoint, or make a peer's agent take an action its human did not
@@ -40,7 +40,7 @@ The properties Magpie actually claims, in [`docs/PROTOCOL.md`](docs/PROTOCOL.md)
 - **Turn cap and TTL enforcement** — a way to keep a call alive past its cap, or to
   extend a pairing past `PAIRING_TTL_MS`.
 - **Supply chain** — anything in the install one-liner, the release workflow, or the
-  relay-pointer indirection (`https://ssh-ai.github.io/magpie/relay.txt`) that lets a
+  relay-pointer indirection (`https://sshaipowered.github.io/magpie/relay.txt`) that lets a
   third party change what a user ends up executing.
 
 ## Already known — please do not report these as new

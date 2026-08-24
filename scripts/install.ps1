@@ -1,6 +1,6 @@
 # Magpie installer (Windows) - no Node/npm/docker required.
 #
-#   irm https://ssh-ai.github.io/magpie/install.ps1 | iex
+#   irm https://sshaipowered.github.io/magpie/install.ps1 | iex
 #
 # Installs magpie binaries to ~\.magpie\bin and registers the MCP server with
 # Claude Code, Codex and Gemini CLI if present.
@@ -17,7 +17,7 @@
 # is a rule nobody remembers at 2am. CI enforces the whole file.
 $ErrorActionPreference = "Stop"
 
-$repo = "ssh-ai/magpie"
+$repo = "sshaipowered/magpie"
 $dir  = Join-Path $HOME ".magpie\bin"
 $url  = "https://github.com/$repo/releases/latest/download/magpie-windows-x64.zip"
 

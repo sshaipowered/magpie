@@ -1,14 +1,14 @@
 #!/bin/sh
 # Magpie installer — one line, no Node/npm/docker required.
 #
-#   curl -fsSL https://ssh-ai.github.io/magpie/install.sh | sh
+#   curl -fsSL https://sshaipowered.github.io/magpie/install.sh | sh
 #
 # Installs the magpie binaries (CLI, relay, MCP server — all standalone) into
 # ~/.magpie/bin and auto-registers the MCP server with every agent it can detect
 # (Claude Code, Codex, Gemini CLI; prints the command to paste for the rest).
 set -eu
 
-REPO="ssh-ai/magpie"
+REPO="sshaipowered/magpie"
 INSTALL_DIR="${MAGPIE_HOME:-$HOME/.magpie}/bin"
 BASE="https://github.com/$REPO/releases/latest/download"
 

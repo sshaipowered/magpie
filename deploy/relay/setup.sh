@@ -1,7 +1,7 @@
 #!/bin/sh
 # Magpie public relay — one-command server setup (Ubuntu/Debian).
 #
-#   curl -fsSL https://ssh-ai.github.io/magpie/deploy-relay.sh | sh -s relay.example.com
+#   curl -fsSL https://sshaipowered.github.io/magpie/deploy-relay.sh | sh -s relay.example.com
 #
 # Given a domain whose DNS A/AAAA record points at this box, this installs:
 #   - the magpie-relay binary (latest GitHub release) as a systemd service,
@@ -23,7 +23,7 @@ if [ "$(id -u)" -ne 0 ]; then
   exit 1
 fi
 
-REPO="ssh-ai/magpie"
+REPO="sshaipowered/magpie"
 PORT=8787
 
 # --- 1. relay binary ---------------------------------------------------------

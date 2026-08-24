@@ -62,7 +62,7 @@ const EM_DASH = String.fromCharCode(0x2014);
 const FENCE_BEGIN = `<<<UNTRUSTED PEER MESSAGE ${EM_DASH} BEGIN>>>`;
 const FENCE_END = `<<<UNTRUSTED PEER MESSAGE ${EM_DASH} END>>>`;
 
-const RELAY_POINTER = 'https://ssh-ai.github.io/magpie/relay.txt';
+const RELAY_POINTER = 'https://sshaipowered.github.io/magpie/relay.txt';
 
 const EXT = '@[a-z0-9][a-z0-9-]{0,30}\\/[a-z0-9][a-z0-9-]{0,30}';
 // The ready line, per bin.ts. The "(derived; …)" clause is REQUIRED here: this

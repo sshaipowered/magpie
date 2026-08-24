@@ -349,7 +349,7 @@ through `sb_resolve`. 215 tests green (141 TS + 74 Rust).
 - [x] Prebuilt **binaries** for 5 platforms + `curl | sh` / `irm | iex`
       installers, served from Pages, auto-registering the MCP with Claude Code
       and Codex. Docker image not published (the binary makes it optional).
-- [x] **Simple website** live at ssh-ai.github.io/magpie (30-sec explainer,
+- [x] **Simple website** live at sshaipowered.github.io/magpie (30-sec explainer,
       animated session demo, one-line install).
 - [x] **Repo public.**
 - [ ] **npm publish `@magpie/{protocol,client,mcp}`** → the `npx -y @magpie/mcp`

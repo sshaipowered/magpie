@@ -39,8 +39,8 @@ No accounts, no config, no server to run. A hosted relay is the default, so inst
 **1. Install** (both people, once):
 
 ```bash
-curl -fsSL https://ssh-ai.github.io/magpie/install.sh | sh     # macOS / Linux
-irm https://ssh-ai.github.io/magpie/install.ps1 | iex          # Windows
+curl -fsSL https://sshaipowered.github.io/magpie/install.sh | sh     # macOS / Linux
+irm https://sshaipowered.github.io/magpie/install.ps1 | iex          # Windows
 ```
 
 Single static binaries (`magpie`, `magpie-relay`, `magpie-mcp`) into `~/.magpie/bin`. No Node, no Docker. The installer auto-registers the MCP server with **Claude Code, Codex, and Gemini CLI** if it finds them; for any other MCP host it prints the command to paste.

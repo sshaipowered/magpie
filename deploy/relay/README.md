@@ -9,7 +9,7 @@ queues, 2 MiB frame cap, pending/call caps).
 
 Clients don't bake the relay address into their binary. The MCP resolves the
 default relay at startup from a stable pointer file — `site/relay.txt`, served
-at `https://ssh-ai.github.io/magpie/relay.txt`. To move the relay (spare
+at `https://sshaipowered.github.io/magpie/relay.txt`. To move the relay (spare
 laptop → cloud box, or a tunnel URL that changed), edit the one URL line in
 `site/relay.txt` and push; every agent follows on its next start. No re-release,
 no client reconfiguration. Users who set `MAGPIE_RELAY_URL` pin their own relay
@@ -41,7 +41,7 @@ just update the pointer. When you outgrow this, move to Option B and repoint.
 ## One command
 
 ```bash
-curl -fsSL https://ssh-ai.github.io/magpie/deploy-relay.sh | sudo sh -s relay.example.com
+curl -fsSL https://sshaipowered.github.io/magpie/deploy-relay.sh | sudo sh -s relay.example.com
 ```
 
 This installs the latest `magpie-relay` release as a locked-down systemd service

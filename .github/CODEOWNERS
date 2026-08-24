@@ -1,14 +1,14 @@
 # With a single maintainer this changes nothing today. It is here for the day it
 # does: the moment anyone else gets write access, the paths below stop being
 # self-mergeable by accident.
-*                           @ssh-ai
+*                           @sshaipowered
 
 # A subtle change here weakens the encryption for every call without breaking a
 # single test. This is the file class that must never merge unreviewed.
-/packages/protocol/         @ssh-ai
-/rust/crates/magpie-protocol/  @ssh-ai
+/packages/protocol/         @sshaipowered
+/rust/crates/magpie-protocol/  @sshaipowered
 
 # Both decide what a user's machine downloads and executes, and both run with
 # more privilege than the product does.
-/.github/workflows/         @ssh-ai
-/scripts/                   @ssh-ai
+/.github/workflows/         @sshaipowered
+/scripts/                   @sshaipowered

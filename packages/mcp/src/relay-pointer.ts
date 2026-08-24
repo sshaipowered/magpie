@@ -17,7 +17,7 @@
  */
 
 /** The permanent pointer URL. Its CONTENTS change; this address never does. */
-export const DEFAULT_RELAY_POINTER = 'https://ssh-ai.github.io/magpie/relay.txt';
+export const DEFAULT_RELAY_POINTER = 'https://sshaipowered.github.io/magpie/relay.txt';
 
 /** How long to wait on the pointer fetch before falling back to invite-only. */
 const FETCH_TIMEOUT_MS = 4000;

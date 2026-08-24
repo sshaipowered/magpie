@@ -80,7 +80,7 @@ jobs:
             TAG="$(curl -fsSL --retry 5 --retry-all-errors --retry-delay 2 \
               --connect-timeout 10 --max-time 60 \
               -o /dev/null -w '%{url_effective}' \
-              https://github.com/ssh-ai/magpie/releases/latest | sed 's#.*/tag/##')"
+              https://github.com/sshaipowered/magpie/releases/latest | sed 's#.*/tag/##')"
           fi
           case "$TAG" in
             v[0-9]*) ;;
@@ -98,7 +98,7 @@ jobs:
         run: |
           set -euo pipefail
           if ! curl -fsS --retry 5 --retry-all-errors --max-time 30 \
-              https://ssh-ai.github.io/magpie/relay.txt | grep -qE '^wss?://'; then
+              https://sshaipowered.github.io/magpie/relay.txt | grep -qE '^wss?://'; then
             echo "relay pointer unreachable or malformed — infrastructure, not the release" >&2
             exit 1
           fi
@@ -152,7 +152,7 @@ jobs:
         if: runner.os != 'Windows'
         shell: bash
         env:
-          URL: https://github.com/ssh-ai/magpie/releases/download/${{ needs.resolve.outputs.tag }}/${{ matrix.asset }}
+          URL: https://github.com/sshaipowered/magpie/releases/download/${{ needs.resolve.outputs.tag }}/${{ matrix.asset }}
         run: |
           set -euo pipefail
           mkdir -p bin
@@ -174,7 +174,7 @@ jobs:
         if: runner.os == 'Windows'
         shell: pwsh
         env:
-          URL: https://github.com/ssh-ai/magpie/releases/download/${{ needs.resolve.outputs.tag }}/${{ matrix.asset }}
+          URL: https://github.com/sshaipowered/magpie/releases/download/${{ needs.resolve.outputs.tag }}/${{ matrix.asset }}
         run: |
           $ErrorActionPreference = 'Stop'
           $ProgressPreference = 'SilentlyContinue'
@@ -272,7 +272,7 @@ jobs:
         if: runner.os == 'Windows'
         shell: powershell
         run: |
-          $r = Invoke-RestMethod https://ssh-ai.github.io/magpie/install.ps1
+          $r = Invoke-RestMethod https://sshaipowered.github.io/magpie/install.ps1
           Write-Host "irm returned: $($r.GetType().FullName)"
           if ($r -isnot [string]) {
             Write-Host "NOT A STRING - iex cannot evaluate this"
@@ -308,7 +308,7 @@ jobs:
         if: runner.os == 'Windows'
         shell: powershell
         run: |
-          irm https://ssh-ai.github.io/magpie/install.ps1 | iex
+          irm https://sshaipowered.github.io/magpie/install.ps1 | iex
           if ($LASTEXITCODE -ne 0 -and $null -ne $LASTEXITCODE) { throw "installer exited $LASTEXITCODE" }
           $exe = Join-Path $HOME ".magpie\bin\magpie.exe"
           if (-not (Test-Path $exe)) { throw "installer finished but $exe is missing" }
@@ -319,7 +319,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          curl -fsSL https://ssh-ai.github.io/magpie/install.sh | sh
+          curl -fsSL https://sshaipowered.github.io/magpie/install.sh | sh
           test -x "$HOME/.magpie/bin/magpie"
           "$HOME/.magpie/bin/magpie" --version
 
