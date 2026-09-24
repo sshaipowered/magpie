@@ -9,6 +9,11 @@ import {
   DEFAULT_MAX_TURNS,
   ABSOLUTE_MAX_TURNS,
   PROTOCOL_VERSION,
+  decodeIdentity,
+  decodeResolution,
+  encodeIdentity,
+  encodeResolution,
+  IDENTITY_TURN_BUDGET,
 } from '@magpie/protocol';
 import type {
   Extension,
@@ -17,6 +22,8 @@ import type {
   CallReport,
   CallOutcome,
   TranscriptEntry,
+  IdentityRef,
+  Resolution,
 } from '@magpie/protocol';
 import type {
   ClientToRelay,
@@ -30,7 +37,7 @@ import { parseRelayFrame } from './wire.js';
 type MessageCb = (msg: Message) => void;
 type HangupCb = (reason: string) => void;
 type PeerJoinedCb = (callId: string, peer: Extension) => void;
-type ResolvedCb = (callId: string, summary: string) => void;
+type ResolvedCb = (callId: string, summary: string, resolution: Resolution) => void;
 
 /** Per-call bookkeeping for transcript + report building. */
 interface CallCtx {
@@ -41,6 +48,10 @@ interface CallCtx {
   transcript: TranscriptEntry[];
   /** Set when a `resolve` message is sent or received. */
   summary: string | null;
+  /** The structured form of the same resolution; `summary` is its `.summary`. */
+  resolution: Resolution | null;
+  /** What the peer announced about itself, if anything. Attribution only. */
+  peerIdentity: IdentityRef | null;
 }
 
 /** A request awaiting its matching relay reply, correlated by reply type. */
@@ -87,15 +98,22 @@ export class MagpieClient {
 
   #closed = false;
 
-  private constructor(ws: WebSocket) {
+  /** This side's announceable identity, or null when the caller opted out. */
+  readonly #identity: IdentityRef | null;
+
+  private constructor(ws: WebSocket, identity: IdentityRef | null) {
     this.#ws = ws;
+    this.#identity = identity;
     ws.on('message', (data) => this.#onWireData(data));
     ws.on('close', () => this.#onClose('connection closed'));
     ws.on('error', (err) => this.#onClose(`connection error: ${String(err)}`));
   }
 
   /** Open a WebSocket to the relay and resolve once it is ready. */
-  static connect(relayUrl: string): Promise<MagpieClient> {
+  static connect(
+    relayUrl: string,
+    opts: { identity?: IdentityRef | null } = {},
+  ): Promise<MagpieClient> {
     return new Promise((resolve, reject) => {
       const ws = new WebSocket(relayUrl);
       const onError = (err: Error) => {
@@ -105,7 +123,7 @@ export class MagpieClient {
       ws.once('error', onError);
       ws.once('open', () => {
         ws.removeListener('error', onError);
-        resolve(new MagpieClient(ws));
+        resolve(new MagpieClient(ws, opts.identity ?? null));
       });
     });
   }
@@ -125,7 +143,11 @@ export class MagpieClient {
 
     // Clamp client-side too; the relay re-clamps, but never send nonsense.
     const requested = opts.maxTurns ?? DEFAULT_MAX_TURNS;
-    const maxTurns = Math.max(1, Math.min(requested, ABSOLUTE_MAX_TURNS));
+    // The relay counts every sealed send, identity announcements included, so
+    // reserve their budget on top of what the caller asked for. Otherwise a
+    // caller's maxTurns=4 would quietly become two real messages.
+    const budget = this.#identity ? IDENTITY_TURN_BUDGET : 0;
+    const maxTurns = Math.max(1, Math.min(requested + budget, ABSOLUTE_MAX_TURNS));
 
     const send: OpenFrame = {
       t: 'open',
@@ -144,6 +166,8 @@ export class MagpieClient {
       startedAt: new Date().toISOString(),
       transcript: [],
       summary: null,
+      resolution: null,
+      peerIdentity: null,
     });
     return { code, callId: opened.callId, channel };
   }
@@ -171,7 +195,10 @@ export class MagpieClient {
       startedAt: new Date().toISOString(),
       transcript: [],
       summary: null,
+      resolution: null,
+      peerIdentity: null,
     });
+    this.#announceIdentity(joined.callId);
     // `peer` is the opener's extension, reported by the relay in the `joined`
     // frame. Surfacing it lets callers address outbound messages correctly.
     return { callId: joined.callId, peer: joined.peer, channel };
@@ -182,6 +209,12 @@ export class MagpieClient {
    * The relay routes it to the other endpoint; it never sees the plaintext.
    */
   async send(callId: string, msg: Message): Promise<void> {
+    this.#sendSealed(callId, msg);
+    this.#record(callId, msg);
+  }
+
+  /** Seal + ship without touching the transcript. Control-plane frames use this. */
+  #sendSealed(callId: string, msg: Message): void {
     const channel = this.#channels.get(callId);
     if (!channel) throw new Error(`no channel for call ${callId}`);
 
@@ -196,7 +229,6 @@ export class MagpieClient {
     const frame = Buffer.from(sealed).toString('base64');
 
     this.#sendFrame({ t: 'send', callId, frame });
-    this.#record(callId, msg);
   }
 
   /**
@@ -204,11 +236,13 @@ export class MagpieClient {
    * it. Sends a `resolve` message (the peer learns the conclusion) and hangs up.
    * The summary lands in both sides' end-of-call report.
    */
-  async resolve(callId: string, summary: string): Promise<void> {
+  async resolve(callId: string, resolution: string | Resolution): Promise<void> {
     const ctx = this.#ctx.get(callId);
     if (!ctx) throw new Error(`no such call ${callId}`);
     if (!ctx.peer) throw new Error('cannot resolve before a peer has joined');
-    ctx.summary = summary;
+    const r: Resolution = typeof resolution === 'string' ? { summary: resolution } : resolution;
+    ctx.resolution = r;
+    ctx.summary = r.summary;
     const msg: Message = {
       v: PROTOCOL_VERSION,
       id: newMessageId(),
@@ -219,9 +253,11 @@ export class MagpieClient {
       ts: new Date().toISOString(),
       turn: ctx.transcript.length,
       inReplyTo: null,
-      content: summary,
+      content: encodeResolution(r),
     };
-    await this.send(callId, msg);
+    this.#sendSealed(callId, msg);
+    // The transcript keeps the human-readable summary, never the envelope.
+    this.#record(callId, { ...msg, content: r.summary });
     await this.hangup(callId);
   }
 
@@ -229,13 +265,18 @@ export class MagpieClient {
   buildReport(callId: string, outcome: CallOutcome): CallReport | null {
     const ctx = this.#ctx.get(callId);
     if (!ctx) return null;
+    const resolved = outcome === 'resolved';
     return {
       callId,
       topic: ctx.topic,
       me: ctx.from,
       peer: ctx.peer,
       outcome,
-      summary: outcome === 'resolved' ? ctx.summary : null,
+      summary: resolved ? ctx.summary : null,
+      // Present only on a resolution, and then always arrays: a parser must be
+      // able to tell "listed none" from "this call never resolved".
+      ...(resolved ? { agreed: ctx.resolution?.agreed ?? [], contested: ctx.resolution?.contested ?? [] } : {}),
+      identity: { me: this.#identity, peer: ctx.peerIdentity },
       turns: ctx.transcript.length,
       startedAt: ctx.startedAt,
       endedAt: new Date().toISOString(),
@@ -253,6 +294,34 @@ export class MagpieClient {
       ts: msg.ts,
     };
     ctx.transcript.push(entry);
+  }
+
+  /**
+   * One sealed `system` frame carrying this side's public key. Never recorded
+   * in the transcript and never surfaced to a model: bookkeeping, not
+   * conversation. Failure is logged, not thrown — a call without attribution
+   * is still a call.
+   */
+  #announceIdentity(callId: string): void {
+    if (!this.#identity) return;
+    const ctx = this.#ctx.get(callId);
+    if (!ctx || !ctx.peer) return;
+    try {
+      this.#sendSealed(callId, {
+        v: PROTOCOL_VERSION,
+        id: newMessageId(),
+        callId,
+        from: ctx.from,
+        to: ctx.peer,
+        type: 'system',
+        ts: new Date().toISOString(),
+        turn: ctx.transcript.length,
+        inReplyTo: null,
+        content: encodeIdentity(this.#identity),
+      });
+    } catch (err) {
+      process.stderr.write(`[magpie] identity announce failed on ${callId}: ${String(err)}\n`);
+    }
   }
 
   /** Register a callback for decrypted, validated inbound messages. */
@@ -376,6 +445,9 @@ export class MagpieClient {
         // already registered at start; surface the peer to any session layer.
         const ctx = this.#ctx.get(frame.callId);
         if (ctx) ctx.peer = frame.peer;
+        // Identity first, so a parked ask that wakes on this callback sends its
+        // question to a peer that already knows who is asking.
+        this.#announceIdentity(frame.callId);
         for (const cb of this.#peerJoinedCbs) cb(frame.callId, frame.peer);
         return;
       }
@@ -414,17 +486,34 @@ export class MagpieClient {
       );
       return;
     }
-    this.#record(callId, msg);
+    // Identity announcements are bookkeeping: record who, then vanish. They
+    // never reach the transcript, the turn count, or a listener. A `system`
+    // frame that is NOT an announcement falls through untouched.
+    if (msg.type === 'system') {
+      const id = decodeIdentity(msg.content);
+      if (id) {
+        const ctx = this.#ctx.get(callId);
+        if (ctx) ctx.peerIdentity = id;
+        return;
+      }
+    }
 
-    // A `resolve` message is the peer concluding the call with a summary — it
-    // is not a normal query, so surface it via onResolved, not onMessage.
+    // A `resolve` message is the peer concluding the call — it is not a normal
+    // query, so surface it via onResolved, not onMessage. The transcript keeps
+    // the summary; the structured form is kept alongside for the report.
     if (msg.type === 'resolve') {
+      const r = decodeResolution(msg.content);
       const ctx = this.#ctx.get(callId);
-      if (ctx) ctx.summary = msg.content;
-      for (const cb of this.#resolvedCbs) cb(callId, msg.content);
+      if (ctx) {
+        ctx.resolution = r;
+        ctx.summary = r.summary;
+      }
+      this.#record(callId, { ...msg, content: r.summary });
+      for (const cb of this.#resolvedCbs) cb(callId, r.summary, r);
       return;
     }
 
+    this.#record(callId, msg);
     for (const cb of this.#messageCbs) cb(msg);
   }
 

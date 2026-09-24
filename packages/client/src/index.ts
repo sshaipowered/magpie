@@ -18,3 +18,23 @@ export type {
   ErrorFrame,
 } from './wire.js';
 export { parseRelayFrame } from './wire.js';
+export { magpieHome } from './home.js';
+export {
+  loadOrCreateIdentity,
+  fingerprintOf,
+  identityDir,
+  toRef,
+  IDENTITY_DIR,
+  IDENTITY_KEY_FILE,
+  IDENTITY_PUB_FILE,
+} from './identity.js';
+export type { Identity } from './identity.js';
+export {
+  saveReport,
+  listReports,
+  readReport,
+  renderReport,
+  outcomeLabel,
+  callsDir,
+  CALLS_DIR,
+} from './reports.js';

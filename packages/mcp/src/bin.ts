@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { createMagpieMcp } from './server.js';
+import { identityDir } from '@magpie/client';
 import { resolveDefaultRelay } from './relay-pointer.js';
 import { resolveExtension } from './default-extension.js';
 
@@ -76,6 +77,13 @@ async function main(): Promise<void> {
   process.stderr.write(
     `[magpie-mcp] ready as ${extension}${derived ? ' (derived; set MAGPIE_EXTENSION to change)' : ''} via ${relayUrl || '(no default relay — join with a full invite, or pass relayUrl to sb_start)'} (stdio)\n`,
   );
+  // A separate line on purpose: the ready line is matched by the release
+  // smoke test and must not change shape. This is what a human copies into a
+  // people mapping. Attribution only; nothing verifies it.
+  const identity = mcp.store.identityRef;
+  if (identity) {
+    process.stderr.write(`[magpie-mcp] identity ${identity.fingerprint} (${identityDir()})\n`);
+  }
 
   const shutdown = (sig: string) => {
     process.stderr.write(`[magpie-mcp] ${sig} received, shutting down\n`);

@@ -12,7 +12,8 @@
 
 import { spawn } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
-import { existsSync, writeSync } from 'node:fs';
+import { existsSync, readFileSync, writeSync } from 'node:fs';
+import { homedir } from 'node:os';
 import path from 'node:path';
 
 // Default to FAILURE, before anything else can go wrong. Every server-side
@@ -260,7 +261,12 @@ function startMcp(label, binPath) {
     for (const c of result.content) {
       must(c.type === 'text', `${label} ${name}: content part is ${c.type}, expected text`);
     }
-    return { text: result.content.map((c) => c.text).join('\n'), isError: result.isError === true };
+    return {
+      text: result.content.map((c) => c.text).join('\n'),
+      isError: result.isError === true,
+      // The CallReport, when a tool returns one. This is the hand-off surface.
+      structured: result.structuredContent ?? null,
+    };
   };
 
   // guarded() in tools.ts converts EVERY thrown error into an ordinary-looking
@@ -311,9 +317,15 @@ function startMcp(label, binPath) {
 // against the payload this returns and nothing else.
 function fencePayload(text, what) {
   const b = text.indexOf(FENCE_BEGIN);
-  // lastIndexOf: peer content may itself contain the END marker (fenceUntrusted
-  // does not escape it, which is a real injection gap worth fixing separately).
-  const e = text.lastIndexOf(FENCE_END);
+  // A tool result may carry MORE THAN ONE fence: on a resolution, sb_listen
+  // fences the summary and then, separately, the peer's agreed/contested
+  // lists. The first fence ends at the last END marker before the next BEGIN,
+  // or the last END in the text if there is no next fence. "Last before next"
+  // rather than "first after this" because peer content may itself contain
+  // the END marker (fenceUntrusted does not escape it, which is a real
+  // injection gap worth fixing separately).
+  const nextBegin = b >= 0 ? text.indexOf(FENCE_BEGIN, b + FENCE_BEGIN.length) : -1;
+  const e = nextBegin >= 0 ? text.lastIndexOf(FENCE_END, nextBegin) : text.lastIndexOf(FENCE_END);
   must(b >= 0 && e > b, `${what}: untrusted-peer fence markers missing:\n${text}`);
   const inner = text.slice(b + FENCE_BEGIN.length, e);
   const sep = inner.indexOf('\n---\n');
@@ -576,8 +588,15 @@ async function main() {
   listen2P.catch(() => {}); // real handling happens at the await below
   await sleep(500);
 
-  step('A: sb_resolve');
-  const resolved = await A.ok('sb_resolve', { callId, summary: R_TEXT }, RESOLVE_MS);
+  step('A: sb_resolve with a structured resolution');
+  const CONTESTED = { point: `cap-${R_NONCE}`, mine: 'enforced', theirs: 'absent' };
+  const resolvedR = await A.call(
+    'sb_resolve',
+    { callId, summary: R_TEXT, agreed: [`agreed-${R_NONCE}`], contested: [CONTESTED] },
+    RESOLVE_MS,
+  );
+  must(!resolvedR.isError, `A sb_resolve failed:\n${resolvedR.text}`);
+  const resolved = resolvedR.text;
   const rLines = resolved.split('\n');
   must(rLines.includes(`Call ${callId} resolved and closed.`), `sb_resolve output unexpected:\n${resolved}`);
   must(rLines.includes(`CONCLUSION: ${R_TEXT}`), `sb_resolve did not echo the summary verbatim:\n${resolved}`);
@@ -589,6 +608,36 @@ async function main() {
     Number(turnsM[1]) >= 3,
     `transcript holds only ${turnsM[1]} message(s); a full round trip records at least 3`,
   );
+
+  step('A: the report comes back as structured content and lands on disk');
+  const ra = resolvedR.structured;
+  must(ra && typeof ra === 'object', `sb_resolve returned no structuredContent:\n${resolved}`);
+  must(ra.callId === callId && ra.outcome === 'resolved', `report header wrong: ${JSON.stringify(ra).slice(0, 200)}`);
+  must(ra.summary === R_TEXT, `report summary != sent summary`);
+  must(Array.isArray(ra.agreed) && ra.agreed[0] === `agreed-${R_NONCE}`, `agreed[] did not round-trip: ${JSON.stringify(ra.agreed)}`);
+  must(
+    Array.isArray(ra.contested) && ra.contested[0]?.point === CONTESTED.point && ra.contested[0]?.mine === 'enforced',
+    `contested[] did not round-trip: ${JSON.stringify(ra.contested)}`,
+  );
+  // Both processes share this machine's ~/.magpie/identity, so the two
+  // fingerprints must be equal AND well-formed. Equal-but-empty would pass a
+  // weaker check, hence the shape test first.
+  const FP = /^[0-9a-f]{32}$/;
+  must(ra.identity && FP.test(ra.identity.me?.fingerprint ?? ''), `report.identity.me malformed: ${JSON.stringify(ra.identity)}`);
+  must(FP.test(ra.identity.peer?.fingerprint ?? ''), `report.identity.peer missing: the peer's identity frame never arrived`);
+  must(ra.identity.peer.fingerprint === ra.identity.me.fingerprint, `same machine, different fingerprints?`);
+  must(
+    !ra.transcript.some((t) => t.type === 'system'),
+    `identity frames leaked into the transcript: ${JSON.stringify(ra.transcript.map((t) => t.type))}`,
+  );
+  // On disk, under the real home (MAGPIE_* is scrubbed for the children). Both
+  // sides write the same path on one machine; the last writer wins, so only
+  // the invariant fields are checked here.
+  const reportPath = path.join(homedir(), '.magpie', 'calls', `${callId}.json`);
+  must(existsSync(reportPath), `no report written at ${reportPath}`);
+  const onDisk = JSON.parse(readFileSync(reportPath, 'utf8'));
+  must(onDisk.callId === callId && onDisk.summary === R_TEXT, `on-disk report does not match: ${reportPath}`);
+  log(`report on disk: ${reportPath}`);
 
   step("B: the parked sb_listen reports A's resolution");
   const closing = await listen2P;
@@ -603,6 +652,12 @@ async function main() {
     `resolve payload corrupted.\n  sent: ${JSON.stringify(R_TEXT)}\n  got:  ${JSON.stringify(rPayload)}`,
   );
   must(rPayload.includes(R_NONCE), `resolve payload is missing the resolve nonce ${R_NONCE}`);
+  // B's side of the same hand-off: the peer's lists arrive structured, and
+  // B's report names A by fingerprint.
+  const rb = closing.structured;
+  must(rb && rb.outcome === 'resolved' && rb.summary === R_TEXT, `B got no structured report on resolve:\n${closing.text}`);
+  must(rb.contested?.[0]?.point === CONTESTED.point && rb.contested[0].theirs === 'absent', `B's contested[] wrong: ${JSON.stringify(rb.contested)}`);
+  must(rb.identity?.peer?.fingerprint === ra.identity.me.fingerprint, `B's report does not attribute A: ${JSON.stringify(rb.identity)}`);
 
   step('negative control: sb_ask on the resolved call must be refused');
   const afterResolve = await A.call('sb_ask', { callId, question: 'x' }, NEG_ASK_MS);

@@ -54,7 +54,33 @@ Validated by `Message` (zod) in `@magpie/protocol`:
 - `content` is capped at `MAX_CONTENT_BYTES` (256 KiB) — anti-DoS, anti-context-blowup.
 - `from`/`to` must match `EXTENSION_RE`; anything else is rejected at the door.
 
+## 3a. Envelopes inside sealed content (no wire change)
+
+Two structured payloads travel INSIDE `content`, so the `Message` schema, the
+relay, and any older peer are unaffected. Both are tagged JSON; anything else
+in `content` is ordinary text.
+
+- **`resolution/1`** — `{ magpie, summary, agreed[], contested[] }`, sent as
+  the `resolve` message's content. A resolution with nothing listed goes out as
+  the bare summary string, so an older peer reads exactly what it always did.
+  `contested[i]` is `{ point, mine?, theirs? }`: one item is meant to become one
+  downstream question with two positions. Lists cap at 64 items, strings at
+  4096 chars; malformed items are dropped, never thrown.
+- **`identity/1`** — `{ magpie, fingerprint, publicKey }`, sent once per call
+  by each side as a `system` message the moment the channel is live (opener on
+  `peer-joined`, joiner right after `joined`). Not recorded in the transcript,
+  never surfaced to a model. `fingerprint` = first 32 hex chars of SHA-256 over
+  the Ed25519 public key's SPKI DER; `publicKey` = that key as SPKI PEM.
+
+Both are decoded as hostile input: types checked, sizes capped, unknown shapes
+degrade to "no structure".
+
 ## 4. Turn cap & termination
+
+The relay cannot see message types, so it counts every sealed send as a turn.
+A client that announces identity therefore adds `IDENTITY_TURN_BUDGET` (2) to
+the cap it requests in `open`, so the caller's `maxTurns` still means "messages
+between agents". A `maxTurns: 1` call still allows exactly one real message.
 
 - A call carries `turn` and `maxTurns` (`DEFAULT_MAX_TURNS = 12`, hard ceiling `ABSOLUTE_MAX_TURNS = 50`).
 - The relay increments `turn` per delivered query and refuses delivery past `maxTurns`, emitting a `hangup`.
@@ -84,6 +110,22 @@ cannot read content (no code → no channel key), but they could grief/occupy a 
 **Run the relay behind `wss://` (TLS)** in any non-local deployment to hide rendezvous
 metadata and prevent slot-racing. The relay binds `0.0.0.0` by default (it is a server
 others connect to); terminate TLS in front of it.
+
+## 6b. Identity: attribution, not authentication
+
+Each user has an Ed25519 key pair under `~/.magpie/identity/` (`ed25519.key`
+0600, `ed25519.pub`), created on first use. Its fingerprint is announced per
+call (§3a) and recorded in both end-of-call reports as `identity.me` /
+`identity.peer`, so a downstream system can map fingerprint → person the same
+way it maps git author → person.
+
+**Nothing is verified.** No challenge is signed and no signature is checked;
+possession of the pairing code is still what admits a peer. An attacker who can
+join a call can announce any fingerprint. This is deliberate for a two-person
+internal deployment where the side channel is already trusted: what was missing
+was a stable, non-self-declared identifier for the record, not a proof. The
+private key exists so a signature step can be added later without touching
+anything already on disk.
 
 ## 7. Open items for v1.1+
 

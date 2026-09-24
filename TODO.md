@@ -324,12 +324,17 @@ unless the operator sets `MAGPIE_RELAY_POINTER`), `site/relay.txt` deleted,
 smoke workflow spawns the relay from the archive under test instead of dialing
 one on the internet, README/installers/SECURITY rewritten for self-host only.
 
-Next (AX handoff, decided with the a reviewer session): (1) `sb_resolve` returns
-CallReport JSON as structured content and persists to `~/.magpie/calls/`,
-(2) `{summary, agreed[], contested[]}` inside the sealed resolve content —
-wire unchanged, TS only, (3) per-user key fingerprint in CallReport for
-attribution (not authentication; no signature check). Then the first real
-A (Claude Code) ↔ B (Codex) call. Falsification: after 3 calls, if
+AX hand-off bundle — DONE (2026-09-23, approved by the owner in-session):
+(1) `sb_resolve` and the resolve branch of `sb_listen` return the `CallReport`
+as MCP structured content, and every close (any outcome) writes
+`~/.magpie/calls/<callId>.json`; (2) `{summary, agreed[], contested[]}` rides
+inside the sealed resolve content (`resolution/1`), `contested[i]` =
+`{point, mine?, theirs?}` so one item maps to one gate question; (3) a per-user
+Ed25519 key under `~/.magpie/identity/`, announced once per call as a sealed
+`system` frame (`identity/1`), fingerprint in both reports. Wire schema, relay,
+and Rust crates untouched; the client adds 2 to the requested turn cap so the
+announcements are free. Attribution only, no signature check (PROTOCOL §6b).
+Next: the first real A (Claude Code) ↔ B (Codex) call. Falsification: after 3 calls, if
 `contested[]` is empty while the transcript shows divergence, drop the field
 and extract post-hoc on the AX side.
 

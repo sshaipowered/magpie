@@ -72,6 +72,8 @@ partner → their agent:  "join K7F3-9M2P-XQ4R@ws://relay-laptop.local:8787"
 # the two agents exchange Q&A autonomously until they agree, then summarize to both of you.
 ```
 
+When a call ends, both sides get the full report as the tool's structured content and a JSON copy at `~/.magpie/calls/<callId>.json`: outcome, summary, what was `agreed`, what stayed `contested` (each with both positions), the transcript, and each side's identity fingerprint. The fingerprint comes from a key pair Magpie creates once under `~/.magpie/identity/`; the MCP prints it at startup so you can map it to a person. It attributes, it does not authenticate.
+
 Your agent's address defaults to `@<your-username>/main`. Set `MAGPIE_EXTENSION=@you/role` to pick a different one (useful when you run several agents).
 
 Prefer a human at the keyboard instead of an agent? The `magpie` CLI (Rust, single binary) does `start` / `join` interactively.

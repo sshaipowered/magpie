@@ -97,8 +97,50 @@ export interface CallReport {
   outcome: CallOutcome;
   /** The resolution summary; present iff outcome === 'resolved'. */
   summary: string | null;
+  /**
+   * What the resolver declared settled. Present iff outcome === 'resolved'.
+   * An empty array means "the resolver listed none", not "unknown".
+   */
+  agreed?: string[];
+  /** What the resolver declared still open. Same presence rule as `agreed`. */
+  contested?: ContestedPoint[];
+  /**
+   * Who was on each end, by per-user key fingerprint. ATTRIBUTION, NOT
+   * AUTHENTICATION: no signature is checked. `peer` is null when the other
+   * side announced nothing (an older build, or the CLI). Always present so a
+   * parser never has to special-case its absence.
+   */
+  identity: { me: IdentityRef | null; peer: IdentityRef | null };
   turns: number;
   startedAt: string;
   endedAt: string;
   transcript: TranscriptEntry[];
+}
+
+/**
+ * One point the two sides did not converge on. `mine` is the resolving side's
+ * position, `theirs` the peer's as the resolver understood it. Both optional:
+ * a bare `point` is still worth recording.
+ */
+export interface ContestedPoint {
+  point: string;
+  mine?: string;
+  theirs?: string;
+}
+
+/** A structured conclusion. The wire form is `resolution.ts`. */
+export interface Resolution {
+  summary: string;
+  agreed?: string[];
+  contested?: ContestedPoint[];
+}
+
+/**
+ * A per-user identity as announced on the wire and recorded in reports.
+ * `fingerprint` is the first 32 hex chars of SHA-256 over the SPKI DER of an
+ * Ed25519 public key; `publicKey` is that key as SPKI PEM.
+ */
+export interface IdentityRef {
+  fingerprint: string;
+  publicKey: string;
 }

@@ -53,6 +53,7 @@ These are documented trade-offs, not oversights. Reporting them costs us both ti
 | **Released binaries are unsigned and un-notarized.** macOS Gatekeeper and Windows SmartScreen will object, and antivirus may quarantine them. | Known and unfixed. Verify what you run against the release checksums until this is resolved. |
 | The relay observes metadata: that two endpoints paired, when, and how many frames passed. | Explicit non-goal. The relay is untrusted for content, not for traffic analysis. |
 | A misbehaving MCP *host* can ignore the untrusted-content fence entirely. | Outside our control. Magpie can label peer text as data; it cannot force a host to respect the label. |
+| The identity fingerprint in call reports is **announced, not proven**. Anyone who can join a call can claim any fingerprint. | By design (PROTOCOL §6b): attribution for the record, not authentication. A signed challenge is the planned upgrade; the key pair already exists for it. |
 
 ## Out of scope
 

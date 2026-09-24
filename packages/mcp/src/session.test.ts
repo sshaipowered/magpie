@@ -1,4 +1,7 @@
-import { describe, it, expect, vi } from 'vitest';
+import { afterAll, beforeAll, afterEach, beforeEach, describe, it, expect, vi } from 'vitest';
+import { mkdtempSync, existsSync, readFileSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import {
   newMessageId,
   PROTOCOL_VERSION,
@@ -42,6 +45,7 @@ function fakeClient(): {
       peer: PEER,
       outcome,
       summary: resolved.at(-1)?.summary ?? null,
+      identity: { me: null, peer: null },
       turns: 3,
       startedAt: new Date().toISOString(),
       endedAt: new Date().toISOString(),
@@ -79,6 +83,19 @@ function peerMsg(overrides: Partial<Message> = {}): Message {
   };
   return { ...base, ...overrides };
 }
+
+// Every CallSession close now persists a report. Point the store at a temp dir
+// for the whole file so no test can write under the real ~/.magpie.
+const FILE_HOME = mkdtempSync(join(tmpdir(), 'magpie-session-test-'));
+const PREV_HOME = process.env.MAGPIE_HOME;
+beforeAll(() => {
+  process.env.MAGPIE_HOME = FILE_HOME;
+});
+afterAll(() => {
+  if (PREV_HOME === undefined) delete process.env.MAGPIE_HOME;
+  else process.env.MAGPIE_HOME = PREV_HOME;
+  rmSync(FILE_HOME, { recursive: true, force: true });
+});
 
 describe('CallSession.ask correlates the matching response', () => {
   it('resolves an ask with the response whose inReplyTo matches', async () => {
@@ -248,6 +265,9 @@ function fakeRelayClient(url: string): {
     onMessage: vi.fn(),
     onHangup: vi.fn((cb: (reason: string) => void) => hangupCbs.push(cb)),
     onPeerJoined: vi.fn(),
+    // markClosed builds a report on every close; a relay-shaped stub has no
+    // transcript, so it reports nothing and nothing is written to disk.
+    buildReport: () => null,
     onResolved: vi.fn(),
     start: vi.fn(async () => ({ callId: `call-S${++fakeCallSeq}`, code: 'K7F3-9M2P-XQ4R' })),
     join: vi.fn(async (opts: { from: string; code: string }) => {
@@ -457,5 +477,49 @@ describe('CallSession.ask waits for the peer to join (no poll loop needed)', () 
     const session = newSession(client);
     session.markClosed('done');
     await expect(session.ask('hi')).rejects.toThrow(/closed/);
+  });
+});
+
+describe('CallSession persists a report at close (the AX hand-off artifact)', () => {
+  let home: string;
+  let prev: string | undefined;
+  beforeEach(() => {
+    home = mkdtempSync(join(tmpdir(), 'magpie-home-'));
+    prev = process.env.MAGPIE_HOME;
+    process.env.MAGPIE_HOME = home;
+  });
+  afterEach(() => {
+    if (prev === undefined) delete process.env.MAGPIE_HOME;
+    else process.env.MAGPIE_HOME = prev;
+    rmSync(home, { recursive: true, force: true });
+  });
+
+  it('writes ~/.magpie/calls/<callId>.json on resolve and exposes it as lastReport', async () => {
+    const { client } = fakeClient();
+    const session = newSession(client);
+    expect(session.lastReport).toBeNull();
+    const report = await session.resolve('MET: both requirements confirmed');
+    const path = join(home, 'calls', `${CALL_ID}.json`);
+    expect(existsSync(path)).toBe(true);
+    const onDisk = JSON.parse(readFileSync(path, 'utf8'));
+    expect(onDisk.summary).toBe('MET: both requirements confirmed');
+    expect(onDisk.outcome).toBe('resolved');
+    expect(session.lastReport).toEqual(report);
+  });
+
+  it('writes a report on a relay-side close too, with the outcome mapped from the reason', () => {
+    const { client } = fakeClient();
+    const session = newSession(client);
+    session.markClosed('turn cap of 12 reached');
+    const onDisk = JSON.parse(readFileSync(join(home, 'calls', `${CALL_ID}.json`), 'utf8'));
+    expect(onDisk.outcome).toBe('turn-cap');
+  });
+
+  it('passes a structured resolution through to the client untouched', async () => {
+    const { client, resolved } = fakeClient();
+    const session = newSession(client);
+    const r = { summary: 's', agreed: ['a'], contested: [{ point: 'p', mine: 'm', theirs: 't' }] };
+    await session.resolve(r);
+    expect(resolved[0]).toEqual({ callId: CALL_ID, summary: r });
   });
 });

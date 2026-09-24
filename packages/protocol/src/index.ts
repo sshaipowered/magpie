@@ -7,6 +7,7 @@ export * from './schema.js';
 export * from './pairing.js';
 export * from './invite.js';
 export * from './security.js';
+export * from './resolution.js';
 
 import { customAlphabet } from 'nanoid';
 const idChars = '0123456789ABCDEFGHJKMNPQRSTUVWXYZabcdefghjkmnpqrstuvwxyz_-';

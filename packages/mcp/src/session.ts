@@ -1,11 +1,19 @@
-import { MagpieClient } from '@magpie/client';
+import { MagpieClient, loadOrCreateIdentity, saveReport, toRef } from '@magpie/client';
 import {
   newMessageId,
   parseInvite,
   PROTOCOL_VERSION,
   DEFAULT_MAX_TURNS,
 } from '@magpie/protocol';
-import type { CallReport, Extension, Message, MessageType } from '@magpie/protocol';
+import type {
+  CallOutcome,
+  CallReport,
+  Extension,
+  IdentityRef,
+  Message,
+  MessageType,
+  Resolution,
+} from '@magpie/protocol';
 
 /**
  * Session layer that sits between the MCP tools and the raw MagpieClient.
@@ -74,6 +82,17 @@ const NO_RELAY_HINT =
  * One open call. Wraps the shared client with this call's identity, an inbound
  * query queue, and reply correlation.
  */
+/**
+ * Map the free-text close reason (ours, or the relay's hangup reason) onto the
+ * report's outcome enum. The relay phrases a cap as "turn cap of N reached".
+ */
+function outcomeFromReason(reason: string): CallOutcome {
+  if (reason === 'resolved') return 'resolved';
+  if (/turn cap/i.test(reason)) return 'turn-cap';
+  if (/hangup|hung up/i.test(reason)) return 'hung-up';
+  return 'disconnected';
+}
+
 export class CallSession {
   readonly callId: string;
   readonly self: Extension;
@@ -85,6 +104,8 @@ export class CallSession {
   #turn = 0;
   #closed = false;
   #closedReason: string | null = null;
+  /** Built and persisted at close. The hand-off artifact for anything downstream. */
+  #lastReport: CallReport | null = null;
 
   /** Inbound peer `query` messages not yet handed to the host model. */
   readonly #inbound: Message[] = [];
@@ -239,6 +260,22 @@ export class CallSession {
       this.#waitingListener = null;
       listener(this.#hangupMarker(reason));
     }
+    // Every termination leaves a report on disk, whatever the outcome. This is
+    // the machine-readable hand-off point; a failed write must not turn a
+    // finished call into an error for the model.
+    this.#lastReport = this.#client.buildReport(this.callId, outcomeFromReason(reason));
+    if (this.#lastReport) {
+      try {
+        saveReport(this.#lastReport);
+      } catch (err) {
+        process.stderr.write(`[magpie-mcp] could not save report for ${this.callId}: ${String(err)}\n`);
+      }
+    }
+  }
+
+  /** The report built at close, or null while the call is still open. */
+  get lastReport(): CallReport | null {
+    return this.#lastReport;
   }
 
   /**
@@ -336,12 +373,11 @@ export class CallSession {
    * `sb_resolve`. This is the autonomous agree-loop's terminal move — call it
    * once nothing is left to resolve (agreement, or a firm pass/fail verdict).
    */
-  async resolve(summary: string): Promise<CallReport | null> {
+  async resolve(resolution: string | Resolution): Promise<CallReport | null> {
     this.#assertOpen();
-    await this.#client.resolve(this.callId, summary);
-    const report = this.#client.buildReport(this.callId, 'resolved');
+    await this.#client.resolve(this.callId, resolution);
     this.markClosed('resolved');
-    return report;
+    return this.#lastReport;
   }
 
   /**
@@ -481,10 +517,29 @@ export class SessionStore {
     this.self = opts.self;
     this.#defaultRelayUrl = opts.relayUrl ?? null;
     this.#askTimeoutMs = opts.askTimeoutMs;
-    this.#connect = opts.connect ?? ((url) => MagpieClient.connect(url));
+    this.#connect = opts.connect ?? ((url) => MagpieClient.connect(url, { identity: this.identityRef }));
   }
 
   /** The default relay URL from configuration, if any (used to compose invites). */
+  #identity: IdentityRef | null | undefined;
+
+  /**
+   * This user's announceable identity, loaded from `~/.magpie/identity/` on
+   * first use. Null if that directory cannot be read or created; the MCP then
+   * runs without attribution and says so once on stderr.
+   */
+  get identityRef(): IdentityRef | null {
+    if (this.#identity === undefined) {
+      try {
+        this.#identity = toRef(loadOrCreateIdentity());
+      } catch (err) {
+        process.stderr.write(`[magpie-mcp] no identity, attribution disabled: ${String(err)}\n`);
+        this.#identity = null;
+      }
+    }
+    return this.#identity;
+  }
+
   get relayUrl(): string | null {
     return this.#defaultRelayUrl;
   }
