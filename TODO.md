@@ -334,7 +334,19 @@ Ed25519 key under `~/.magpie/identity/`, announced once per call as a sealed
 `system` frame (`identity/1`), fingerprint in both reports. Wire schema, relay,
 and Rust crates untouched; the client adds 2 to the requested turn cap so the
 announcements are free. Attribution only, no signature check (PROTOCOL §6b).
-Next: the first real A (Claude Code) ↔ B (Codex) call. Falsification: after 3 calls, if
+First real call done 2026-09-24 (Claude `claude -p` ↔ Codex `codex exec`,
+v0.3.0, 7 turns, agreed 5, contested 2 with mine/theirs filled; honest
+non-agreement recorded). AX side wired (the downstream repo).
+
+v0.3.1 (approved by the owner "결함은 해소해야해"): the `open` frame's cleartext
+topic was a zero-function leak (the relay stored it, never forwarded it, and
+the joiner's report said "(joined)"). Topic now rides in the sealed hello
+(`identity/1`, tag kept for v0.3.0 interop); the open frame sends ''. A
+conformance test sniffs the relay's own WebSocketServer to prove the string
+never reaches it. Separately, `fenceUntrusted` now rewrites any marker prefix
+the peer writes, so a peer cannot close the fence early (the injection gap the
+smoke driver had flagged). Rust CLI parity debt stands: it still sends the
+topic in `open` and would print a hello envelope raw as a joiner. Falsification: after 3 calls, if
 `contested[]` is empty while the transcript shows divergence, drop the field
 and extract post-hoc on the AX side.
 

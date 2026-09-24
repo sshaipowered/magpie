@@ -53,7 +53,7 @@ Single static binaries (`magpie`, `magpie-relay`, `magpie-mcp`) into `~/.magpie/
 magpie-relay                      # → listening on ws://0.0.0.0:8787
 ```
 
-The relay brokers **ciphertext only**. It cannot read your code or messages, so where it runs is a reachability question, not a trust one. Keep it up with `launchd`/`systemd` if it is meant to stay up.
+The relay brokers **ciphertext only**. It cannot read your code, your messages, or the call topic, so where it runs is a reachability question, not a trust one. It does see who is talking to whom and how much. Keep it up with `launchd`/`systemd` if it is meant to stay up.
 
 **3. Point the *starting* side at it** — the joining side needs nothing, the invite carries the address:
 

@@ -51,7 +51,7 @@ These are documented trade-offs, not oversights. Reporting them costs us both ti
 | `channelKey = HKDF-SHA256(pairing code)`, so the channel is only as strong as the side channel you paste the code into. | By design for now; ~59 bits, single-use, 10-minute TTL. SPAKE2 PAKE is the planned replacement — `PairingChannel` is the swap seam. See PROTOCOL §2. |
 | `rendezvousId` and control frames are cleartext over plain `ws://`, so an on-path attacker can grief a pairing (not read it). | Documented in PROTOCOL §6a. There is no hosted relay; anyone exposing one beyond a LAN must terminate TLS. |
 | **Released binaries are unsigned and un-notarized.** macOS Gatekeeper and Windows SmartScreen will object, and antivirus may quarantine them. | Known and unfixed. Verify what you run against the release checksums until this is resolved. |
-| The relay observes metadata: that two endpoints paired, when, and how many frames passed. | Explicit non-goal. The relay is untrusted for content, not for traffic analysis. |
+| The relay observes metadata: both extensions, both IPs, and the count, size, and timing of frames. | Explicit non-goal. The relay is untrusted for content, not for traffic analysis. The call topic is **not** among these since v0.3.1; it travels sealed. |
 | A misbehaving MCP *host* can ignore the untrusted-content fence entirely. | Outside our control. Magpie can label peer text as data; it cannot force a host to respect the label. |
 | The identity fingerprint in call reports is **announced, not proven**. Anyone who can join a call can claim any fingerprint. | By design (PROTOCOL §6b): attribution for the record, not authentication. A signed challenge is the planned upgrade; the key pair already exists for it. |
 

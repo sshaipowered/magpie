@@ -48,6 +48,12 @@ describe('structured resolution + identity attribution', () => {
     const idB = toRef(loadOrCreateIdentity(idDir()));
     expect(idA.fingerprint).not.toBe(idB.fingerprint);
 
+    // Sniff every client→relay frame at the WebSocketServer itself. This is the
+    // relay's own view: whatever appears here in cleartext, a relay operator
+    // can read. The topic must not.
+    const relaySaw: string[] = [];
+    relay.wss.on('connection', (sock) => sock.on('message', (d) => relaySaw.push(d.toString())));
+
     const A = await MagpieClient.connect(url, { identity: idA });
     const B = await MagpieClient.connect(url, { identity: idB });
     const bSeen: Resolution[] = [];
@@ -89,6 +95,15 @@ describe('structured resolution + identity attribution', () => {
     }
     expect(ra.identity).toEqual({ me: idA, peer: idB });
     expect(rb.identity).toEqual({ me: idB, peer: idA });
+
+    // The joiner's report is titled by the opener's topic, delivered inside the
+    // sealed hello — not by the relay, which never forwarded it.
+    expect(rb.topic).toBe('risk limit');
+    // And the relay never had it: the cleartext open frame carried an empty
+    // topic, and the string appears nowhere in anything the relay received.
+    const open = relaySaw.map((f) => JSON.parse(f) as { t: string; topic?: string }).find((f) => f.t === 'open');
+    expect(open?.topic).toBe('');
+    expect(relaySaw.some((f) => f.includes('risk limit'))).toBe(false);
     A.close();
     B.close();
   });
@@ -108,6 +123,8 @@ describe('structured resolution + identity attribution', () => {
 
     const ra = A.buildReport(started.callId, 'resolved')!;
     const rc = C.buildReport(joined.callId, 'resolved')!;
+    // C has no key but still received A's hello, topic included.
+    expect(rc.topic).toBe('t');
     expect(ra.summary).toBe('agreed: ship it');
     expect(ra.agreed).toEqual([]);
     expect(ra.contested).toEqual([]);

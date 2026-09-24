@@ -9,9 +9,9 @@ import {
   DEFAULT_MAX_TURNS,
   ABSOLUTE_MAX_TURNS,
   PROTOCOL_VERSION,
-  decodeIdentity,
+  decodeHello,
   decodeResolution,
-  encodeIdentity,
+  encodeHello,
   encodeResolution,
   IDENTITY_TURN_BUDGET,
 } from '@magpie/protocol';
@@ -52,6 +52,8 @@ interface CallCtx {
   resolution: Resolution | null;
   /** What the peer announced about itself, if anything. Attribution only. */
   peerIdentity: IdentityRef | null;
+  /** Which end of the call this is. The opener owns the topic. */
+  role: 'opener' | 'joiner';
 }
 
 /** A request awaiting its matching relay reply, correlated by reply type. */
@@ -143,17 +145,22 @@ export class MagpieClient {
 
     // Clamp client-side too; the relay re-clamps, but never send nonsense.
     const requested = opts.maxTurns ?? DEFAULT_MAX_TURNS;
-    // The relay counts every sealed send, identity announcements included, so
-    // reserve their budget on top of what the caller asked for. Otherwise a
-    // caller's maxTurns=4 would quietly become two real messages.
-    const budget = this.#identity ? IDENTITY_TURN_BUDGET : 0;
-    const maxTurns = Math.max(1, Math.min(requested + budget, ABSOLUTE_MAX_TURNS));
+    // The relay counts every sealed send, hello frames included, so reserve
+    // their budget on top of what the caller asked for. Otherwise a caller's
+    // maxTurns=4 would quietly become two real messages. Unconditional: the
+    // opener always sends a hello (it carries the topic), and the opener
+    // cannot know whether the joiner will send one.
+    const maxTurns = Math.max(1, Math.min(requested + IDENTITY_TURN_BUDGET, ABSOLUTE_MAX_TURNS));
 
     const send: OpenFrame = {
       t: 'open',
       rendezvousId: rendezvousId(code),
       from: opts.from,
-      topic: opts.topic,
+      // Deliberately empty. The relay stored this field and never forwarded it
+      // to the joiner, so a cleartext topic bought nothing and told the relay
+      // operator what the call was about. The real topic travels to the peer
+      // inside the sealed hello frame (#announceHello). Both relays accept ''.
+      topic: '',
       maxTurns,
     };
 
@@ -168,6 +175,7 @@ export class MagpieClient {
       summary: null,
       resolution: null,
       peerIdentity: null,
+      role: 'opener',
     });
     return { code, callId: opened.callId, channel };
   }
@@ -191,14 +199,17 @@ export class MagpieClient {
     this.#ctx.set(joined.callId, {
       from: opts.from,
       peer: joined.peer,
+      // Filled in when the opener's hello arrives; stays '(joined)' only if the
+      // opener predates hello-carried topics.
       topic: '(joined)',
       startedAt: new Date().toISOString(),
       transcript: [],
       summary: null,
       resolution: null,
       peerIdentity: null,
+      role: 'joiner',
     });
-    this.#announceIdentity(joined.callId);
+    this.#announceHello(joined.callId);
     // `peer` is the opener's extension, reported by the relay in the `joined`
     // frame. Surfacing it lets callers address outbound messages correctly.
     return { callId: joined.callId, peer: joined.peer, channel };
@@ -297,15 +308,22 @@ export class MagpieClient {
   }
 
   /**
-   * One sealed `system` frame carrying this side's public key. Never recorded
-   * in the transcript and never surfaced to a model: bookkeeping, not
-   * conversation. Failure is logged, not thrown — a call without attribution
-   * is still a call.
+   * One sealed `system` frame per side, sent the moment the channel is live:
+   * this side's public key (if it has one) and, from the opener, the topic.
+   * Never recorded in the transcript and never surfaced to a model:
+   * bookkeeping, not conversation. Failure is logged, not thrown — a call
+   * without attribution or a title is still a call.
+   *
+   * ALWAYS sent, even as an empty envelope: the opener reserves exactly
+   * IDENTITY_TURN_BUDGET (2) relay turns for hellos and cannot know whether
+   * the joiner has anything to say. If a joiner with no key sent nothing, one
+   * reserved turn would go unspent and the caller's cap would be one message
+   * looser than asked. An empty hello costs ~60 sealed bytes.
    */
-  #announceIdentity(callId: string): void {
-    if (!this.#identity) return;
+  #announceHello(callId: string): void {
     const ctx = this.#ctx.get(callId);
     if (!ctx || !ctx.peer) return;
+    const topic = ctx.role === 'opener' ? ctx.topic : null;
     try {
       this.#sendSealed(callId, {
         v: PROTOCOL_VERSION,
@@ -317,10 +335,10 @@ export class MagpieClient {
         ts: new Date().toISOString(),
         turn: ctx.transcript.length,
         inReplyTo: null,
-        content: encodeIdentity(this.#identity),
+        content: encodeHello({ identity: this.#identity, topic }),
       });
     } catch (err) {
-      process.stderr.write(`[magpie] identity announce failed on ${callId}: ${String(err)}\n`);
+      process.stderr.write(`[magpie] hello failed on ${callId}: ${String(err)}\n`);
     }
   }
 
@@ -445,9 +463,9 @@ export class MagpieClient {
         // already registered at start; surface the peer to any session layer.
         const ctx = this.#ctx.get(frame.callId);
         if (ctx) ctx.peer = frame.peer;
-        // Identity first, so a parked ask that wakes on this callback sends its
-        // question to a peer that already knows who is asking.
-        this.#announceIdentity(frame.callId);
+        // Hello first, so a parked ask that wakes on this callback sends its
+        // question to a peer that already knows who is asking and about what.
+        this.#announceHello(frame.callId);
         for (const cb of this.#peerJoinedCbs) cb(frame.callId, frame.peer);
         return;
       }
@@ -486,14 +504,18 @@ export class MagpieClient {
       );
       return;
     }
-    // Identity announcements are bookkeeping: record who, then vanish. They
+    // Hello frames are bookkeeping: record who and what, then vanish. They
     // never reach the transcript, the turn count, or a listener. A `system`
-    // frame that is NOT an announcement falls through untouched.
+    // frame that is NOT a hello falls through untouched.
     if (msg.type === 'system') {
-      const id = decodeIdentity(msg.content);
-      if (id) {
+      const hello = decodeHello(msg.content);
+      if (hello) {
         const ctx = this.#ctx.get(callId);
-        if (ctx) ctx.peerIdentity = id;
+        if (ctx) {
+          if (hello.identity) ctx.peerIdentity = hello.identity;
+          // Only a joiner takes the topic, and only from the opener's hello.
+          if (hello.topic && ctx.role === 'joiner') ctx.topic = hello.topic;
+        }
         return;
       }
     }

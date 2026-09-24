@@ -658,6 +658,8 @@ async function main() {
   must(rb && rb.outcome === 'resolved' && rb.summary === R_TEXT, `B got no structured report on resolve:\n${closing.text}`);
   must(rb.contested?.[0]?.point === CONTESTED.point && rb.contested[0].theirs === 'absent', `B's contested[] wrong: ${JSON.stringify(rb.contested)}`);
   must(rb.identity?.peer?.fingerprint === ra.identity.me.fingerprint, `B's report does not attribute A: ${JSON.stringify(rb.identity)}`);
+  // The topic reaches B inside the sealed hello, never via the relay.
+  must(rb.topic === 'release smoke test', `B's report topic is ${JSON.stringify(rb.topic)}, expected the opener's topic`);
 
   step('negative control: sb_ask on the resolved call must be refused');
   const afterResolve = await A.call('sb_ask', { callId, question: 'x' }, NEG_ASK_MS);

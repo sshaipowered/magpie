@@ -10,10 +10,13 @@
  *   resolution/1  — the resolver's summary plus what was settled and what was
  *                   not. One contested item is meant to become one downstream
  *                   question with two positions, so it carries both.
- *   identity/1    — a per-user public key and its fingerprint, announced once
- *                   per call by each side. ATTRIBUTION ONLY: nothing verifies a
- *                   signature yet. The key is announced so that can be added
- *                   later without changing anything already on disk.
+ *   identity/1    — the per-call "hello": a per-user public key and its
+ *                   fingerprint (ATTRIBUTION ONLY: nothing verifies a signature
+ *                   yet), plus, from the opener, the call's topic. The topic
+ *                   rides here because the relay never forwarded it anyway: it
+ *                   sat in the cleartext `open` frame with zero function. The
+ *                   tag stays `identity/1` so a v0.3.0 peer, which reads only
+ *                   fingerprint/publicKey, keeps interoperating.
  *
  * Everything decoded here is peer-supplied and treated as hostile: types are
  * checked, strings are capped, lists are capped, and anything malformed
@@ -94,14 +97,32 @@ export function decodeResolution(content: string): Resolution {
   return { summary, agreed, contested };
 }
 
-export function encodeIdentity(id: IdentityRef): string {
-  return JSON.stringify({ magpie: IDENTITY_TAG, fingerprint: id.fingerprint, publicKey: id.publicKey });
+/** Matches the relays' cap on the `open` frame's topic field. */
+export const MAX_TOPIC_CHARS = 2000;
+
+/** What one side says about itself when the channel comes up. */
+export interface Hello {
+  identity: IdentityRef | null;
+  /** Only the opener sets this. */
+  topic: string | null;
 }
 
-/** Null unless the content is a well-formed identity announcement. */
-export function decodeIdentity(content: string): IdentityRef | null {
-  const o = tagged(content, IDENTITY_TAG);
-  if (!o) return null;
+export function encodeHello(h: { identity?: IdentityRef | null; topic?: string | null }): string {
+  const out: Record<string, unknown> = { magpie: IDENTITY_TAG };
+  if (h.identity) {
+    out.fingerprint = h.identity.fingerprint;
+    out.publicKey = h.identity.publicKey;
+  }
+  if (h.topic) out.topic = h.topic.slice(0, MAX_TOPIC_CHARS);
+  return JSON.stringify(out);
+}
+
+/** Backwards-compatible: identity only. */
+export function encodeIdentity(id: IdentityRef): string {
+  return encodeHello({ identity: id });
+}
+
+function identityOf(o: Record<string, unknown>): IdentityRef | null {
   const fingerprint = o.fingerprint;
   const publicKey = o.publicKey;
   if (typeof fingerprint !== 'string' || !FINGERPRINT_RE.test(fingerprint)) return null;
@@ -113,4 +134,21 @@ export function decodeIdentity(content: string): IdentityRef | null {
     return null;
   }
   return { fingerprint, publicKey };
+}
+
+/**
+ * Null unless the content is a hello envelope at all. Inside one, a malformed
+ * identity yields `identity: null` without discarding a valid topic, and vice
+ * versa: the two halves fail independently.
+ */
+export function decodeHello(content: string): Hello | null {
+  const o = tagged(content, IDENTITY_TAG);
+  if (!o) return null;
+  const topic = typeof o.topic === 'string' && o.topic.trim() ? o.topic.slice(0, MAX_TOPIC_CHARS) : null;
+  return { identity: identityOf(o), topic };
+}
+
+/** Null unless the content is a hello carrying a well-formed identity. */
+export function decodeIdentity(content: string): IdentityRef | null {
+  return decodeHello(content)?.identity ?? null;
 }

@@ -66,11 +66,17 @@ in `content` is ordinary text.
   `contested[i]` is `{ point, mine?, theirs? }`: one item is meant to become one
   downstream question with two positions. Lists cap at 64 items, strings at
   4096 chars; malformed items are dropped, never thrown.
-- **`identity/1`** — `{ magpie, fingerprint, publicKey }`, sent once per call
-  by each side as a `system` message the moment the channel is live (opener on
-  `peer-joined`, joiner right after `joined`). Not recorded in the transcript,
-  never surfaced to a model. `fingerprint` = first 32 hex chars of SHA-256 over
-  the Ed25519 public key's SPKI DER; `publicKey` = that key as SPKI PEM.
+- **`identity/1`** (the per-call *hello*) — `{ magpie, fingerprint?, publicKey?,
+  topic? }`, sent once per call by each side as a `system` message the moment
+  the channel is live (opener on `peer-joined`, joiner right after `joined`).
+  Not recorded in the transcript, never surfaced to a model. `fingerprint` =
+  first 32 hex chars of SHA-256 over the Ed25519 public key's SPKI DER;
+  `publicKey` = that key as SPKI PEM. **`topic` is set only by the opener** and
+  is how the joiner learns what the call is about: the cleartext `open` frame
+  now carries `topic: ''`. The relay had stored that field and never forwarded
+  it, so it was a leak with no function. Both sides always send a hello, an
+  empty envelope if there is nothing to say, so the two turns the opener
+  reserves for hellos (§4) are exactly the two that get spent.
 
 Both are decoded as hostile input: types checked, sizes capped, unknown shapes
 degrade to "no structure".
@@ -90,12 +96,19 @@ between agents". A `maxTurns: 1` call still allows exactly one real message.
 
 Unlike a human messenger, a Magpie message is consumed by an LLM with tools. Naively, any peer message is a prompt-injection / RCE vector — this is exactly how prior art (`claude-code-session-bridge`) is exploitable. Mitigations, enforced by `@magpie/protocol/security`:
 
-1. **Fence** — inbound content is wrapped (`fenceUntrusted`) and the receiving agent is instructed to treat it as data, answer only from its own context.
+1. **Fence** — inbound content is wrapped (`fenceUntrusted`) and the receiving agent is instructed to treat it as data, answer only from its own context. A marker the peer writes into its own text is rewritten to a visibly different string, so the fence closes exactly once, where the receiver closes it.
 2. **Action gate** — `ActionPolicy` defaults to `{ readOwnFiles: true, runTools: false, answerWhileAway: true }`. A peer message can never make the local agent run shell or edit files without explicit local human approval.
 3. **Strict ids** — no peer-supplied string is ever interpolated into a filesystem path unvalidated (`assertSafeExtension`), closing the path-traversal / `rm -rf` class.
 4. **No silent destructive ops** — the relay and adapters never `rm -rf` a path built from peer/pointer input.
 
 ## 6. What the relay is NOT trusted with
+
+What the relay *does* see, stated plainly so nobody assumes less: both
+extensions (`from` in `open`/`join`, which it forwards as `peer`), the
+`rendezvousId` (HKDF-derived, not the code), `callId`, `maxTurns`, the count,
+size, and timing of sealed frames (message lengths are visible through AES-GCM),
+both endpoints' IP addresses, and the hangup reason it generates itself. It does
+NOT see the topic (since v0.3.1), any message content, or the pairing code.
 
 - Reading content (E2E encrypted).
 - Asserting identity (endpoints are bound by possession of the code-derived key).
