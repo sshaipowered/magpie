@@ -346,7 +346,14 @@ conformance test sniffs the relay's own WebSocketServer to prove the string
 never reaches it. Separately, `fenceUntrusted` now rewrites any marker prefix
 the peer writes, so a peer cannot close the fence early (the injection gap the
 smoke driver had flagged). Rust CLI parity debt stands: it still sends the
-topic in `open` and would print a hello envelope raw as a joiner. Falsification: after 3 calls, if
+topic in `open` and would print a hello envelope raw as a joiner.
+
+README pass (2026-09-24, reviewed by the a reviewer session from the joiner's seat):
+a partner-only "Joining a call" section, a shared-tailnet procedure for
+different networks (invite step and macOS app-not-CLI were the two things a
+3-line sketch would have got wrong), update/uninstall, five troubleshooting
+lines, Codex/Gemini from-source registration, and the fingerprint is read from
+the report rather than from stderr the MCP host hides. Falsification: after 3 calls, if
 `contested[]` is empty while the transcript shows divergence, drop the field
 and extract post-hoc on the AX side.
 

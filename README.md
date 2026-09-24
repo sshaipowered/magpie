@@ -34,7 +34,7 @@ One handshake, then unlimited automatic round trips — strictly cheaper than re
 
 ## Quickstart
 
-No accounts, no config files, no hosted service. One of you runs the relay; the other needs nothing.
+No accounts, no config files, no hosted service. One of you runs a relay; the other needs no configuration.
 
 **1. Install** (both people, once):
 
@@ -47,7 +47,14 @@ Single static binaries (`magpie`, `magpie-relay`, `magpie-mcp`) into `~/.magpie/
 
 > Gemini CLI users: Gemini gates MCP servers behind *folder trust*. If `gemini mcp list` shows magpie as `Disabled`, that is the gate, not a broken install — trust the folder.
 
-**2. Run the relay** (one machine both agents can reach, e.g. a spare laptop on your LAN):
+**Then restart your agent.** MCP hosts read their server list when a session starts, so a session that was already open will not see `magpie` until you open a new one. Verify:
+
+```bash
+magpie --version                 # open a new shell first, or source your rc file
+claude mcp list                  # or: codex mcp list / gemini mcp list — magpie should be listed
+```
+
+**2. Run the relay** (one machine both agents can reach, e.g. a spare laptop):
 
 ```bash
 magpie-relay                      # → listening on ws://0.0.0.0:8787
@@ -55,13 +62,13 @@ magpie-relay                      # → listening on ws://0.0.0.0:8787
 
 The relay brokers **ciphertext only**. It cannot read your code, your messages, or the call topic, so where it runs is a reachability question, not a trust one. It does see who is talking to whom and how much. Keep it up with `launchd`/`systemd` if it is meant to stay up.
 
-**3. Point the *starting* side at it** — the joining side needs nothing, the invite carries the address:
+**3. Point the *starting* side at it** — the joining side needs no configuration, the invite carries the address:
 
 ```bash
-export MAGPIE_RELAY_URL=ws://relay-laptop.local:8787   # a hostname, not a DHCP IP
+export MAGPIE_RELAY_URL=ws://relay-laptop.local:8787   # same LAN: a .local name, not a DHCP IP
 ```
 
-Use a `.local` name (mDNS, built into macOS and most Linux) or a DHCP reservation. A raw IP goes stale the day the router hands out a different one, and the starter's MCP only reads this variable at startup.
+Use a `.local` name (mDNS, built into macOS and most Linux) or a DHCP reservation. A raw IP goes stale the day the router hands out a different one, and the starter's MCP reads this variable once, at startup. **On different networks, `.local` does not resolve at all** — see [Not on the same LAN](#not-on-the-same-lan) before this step.
 
 **4. Just talk to your agent:**
 
@@ -72,19 +79,63 @@ partner → their agent:  "join K7F3-9M2P-XQ4R@ws://relay-laptop.local:8787"
 # the two agents exchange Q&A autonomously until they agree, then summarize to both of you.
 ```
 
-When a call ends, both sides get the full report as the tool's structured content and a JSON copy at `~/.magpie/calls/<callId>.json`: outcome, summary, what was `agreed`, what stayed `contested` (each with both positions), the transcript, and each side's identity fingerprint. The fingerprint comes from a key pair Magpie creates once under `~/.magpie/identity/`; the MCP prints it at startup so you can map it to a person. It attributes, it does not authenticate.
+When a call ends, both sides get the full report as the tool's structured content and a JSON copy at `~/.magpie/calls/<callId>.json`: outcome, summary, what was `agreed`, what stayed `contested` (each with both positions), the transcript, and each side's identity fingerprint. The fingerprint comes from a key pair Magpie creates once under `~/.magpie/identity/`. MCP hosts hide the server's log output, so read your own fingerprint from any report's `identity.me.fingerprint` after your first call. It attributes, it does not authenticate.
 
 Your agent's address defaults to `@<your-username>/main`. Set `MAGPIE_EXTENSION=@you/role` to pick a different one (useful when you run several agents).
 
 Prefer a human at the keyboard instead of an agent? The `magpie` CLI (Rust, single binary) does `start` / `join` interactively.
 
-**Beyond one LAN:** put the relay behind a TLS reverse proxy for `wss://` (see [`deploy/relay/`](deploy/relay/)), or join both machines to a tailnet. There is deliberately no relay run by this project: one that you do not operate is a dependency you cannot keep alive, and the last one proved it.
+### Joining a call (for your partner)
+
+You received an invite line. This is everything you need to do:
+
+1. **Install** (step 1 above), then **restart your agent** and confirm `claude mcp list` (or `codex mcp list` / `gemini mcp list`) shows `magpie`.
+2. **Same LAN as the relay?** Nothing more. **Different network?** Accept the starter's Tailscale invitation first — see the next section.
+3. **Tell your agent to join**, pasting the whole invite line exactly as sent: `join K7F3-9M2P-XQ4R@ws://relay-laptop.local:8787`. The relay address is inside the invite; you set no variables.
+4. Your agent handles the conversation and reports the conclusion when the call ends. The full report is at `~/.magpie/calls/<callId>.json`.
+
+### Not on the same LAN
+
+`.local` names only resolve on one LAN. Across networks, the simplest path is a shared tailnet. No port forwarding, no public endpoint.
+
+1. **Relay host:** install [Tailscale](https://tailscale.com), sign in, and invite your partner from the admin console (**Users → Invite**). The free Personal plan covers a small team.
+2. **Partner:** install the Tailscale app (macOS/Windows: the app — on macOS the CLI lives inside the app bundle, so use the app; Linux: `tailscale up`) and sign in through the invitation. You are now on the same tailnet.
+3. **Starter:** use the relay host's MagicDNS name instead of `.local`. It survives IP and network changes:
+
+```bash
+export MAGPIE_RELAY_URL=ws://relay-laptop.<your-tailnet>.ts.net:8787
+```
+
+If your partner cannot install anything, put the relay behind a TLS reverse proxy (`wss://`, see [`deploy/relay/`](deploy/relay/)) or a Cloudflare Tunnel and use that public `wss://` URL in step 3 instead. Whoever runs that endpoint sees the relay's metadata (addresses, sizes, timing), never the content or topic.
+
+### Updating and uninstalling
+
+**Update:** re-run the install one-liner. It overwrites the binaries and registration is idempotent. Then **restart your agent**: a running `magpie-mcp` process is still the old binary until the host starts a new one.
+
+**Uninstall:**
+
+```bash
+claude mcp remove magpie -s user      # and/or: codex mcp remove magpie / gemini mcp remove -s user magpie
+rm -rf ~/.magpie/bin
+```
+
+Then remove the `# magpie` PATH line from `~/.zshrc` or `~/.bashrc` (Windows: the `~\.magpie\bin` entry in your user PATH). `~/.magpie/calls/` (your reports) and `~/.magpie/identity/` (your key) are left alone; delete them yourself if you want them gone.
+
+### Troubleshooting
+
+- **`sb_start` fails with connection refused** (starter): the relay is not running, or `MAGPIE_RELAY_URL` names the wrong host. Start `magpie-relay` where the variable points.
+- **Changed `MAGPIE_RELAY_URL` and nothing changed** (starter): the MCP reads it once at startup. Restart your agent session. The joiner never needs this variable.
+- **macOS asks whether `magpie-relay` may accept incoming connections** (relay host): the binaries are unsigned, so the application firewall prompts. Click Allow; it may ask again after an update.
+- **Joiner gets `UNKNOWN_RENDEZVOUS`**: the code expired (10 minutes, single use) or was mistyped. Ask for a fresh invite.
+- **`magpie: command not found` right after installing**: the installer added `~/.magpie/bin` to your PATH for *new* shells. Open a new terminal.
 
 **From source instead of the installer:**
 
 ```bash
 npm install && npx tsc -b
-claude mcp add magpie -- node "$(pwd)/packages/mcp/dist/bin.js"
+claude mcp add magpie --scope user -- node "$(pwd)/packages/mcp/dist/bin.js"
+codex mcp add magpie -- node "$(pwd)/packages/mcp/dist/bin.js"
+gemini mcp add -s user magpie node "$(pwd)/packages/mcp/dist/bin.js"
 ```
 
 ## Security model (summary)
@@ -111,4 +162,4 @@ See [`docs/PROTOCOL.md`](docs/PROTOCOL.md) for the full handshake and threat mod
 
 ## Status
 
-Working core, MIT licensed. Agent↔agent calls (query → answer → mutual agreement → report) run cross-machine, end-to-end encrypted, over MCP, verified live across vendors (Claude ↔ Gemini). The relay/protocol/client/CLI have a **Rust implementation** (single static binaries; relay ~1 MB) alongside the TypeScript reference packages, verified byte-compatible on the wire and crypto. **Self-host only**: there is no hosted relay. Install via the one-liner above; the npm packages are not published yet, so the from-source path is still `node packages/mcp/dist/bin.js`.
+Working core, MIT licensed. Agent↔agent calls (query → answer → mutual agreement → report) run cross-machine, end-to-end encrypted, over MCP, verified live across vendors: Claude ↔ Gemini (2026-07) and Claude ↔ Codex (2026-09, seven turns ending in an honestly recorded non-agreement). The relay/protocol/client/CLI have a **Rust implementation** (single static binaries; relay ~1 MB) alongside the TypeScript reference packages, verified byte-compatible on the wire and crypto. **Self-host only**: there is no hosted relay. Install via the one-liner above; the npm packages are not published yet, so the from-source path is still `node packages/mcp/dist/bin.js`.
