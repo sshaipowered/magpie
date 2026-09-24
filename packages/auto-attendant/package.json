@@ -1,6 +1,6 @@
 {
   "name": "@magpie/auto-attendant",
-  "version": "0.2.2",
+  "version": "0.3.0",
   "description": "Headless 'answer on your behalf' worker for Magpie: listens for inbound queries on a call and answers from your own files via a vendor-pluggable Responder (Claude/Codex/Gemini). Never guesses — escalates to the human when unsure or gated.",
   "license": "MIT",
   "type": "module",

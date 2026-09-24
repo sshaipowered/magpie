@@ -1,6 +1,6 @@
 {
   "name": "@magpie/mcp",
-  "version": "0.2.2",
+  "version": "0.3.0",
   "description": "Magpie MCP server: exposes sb_start/sb_join/sb_ask/sb_listen/sb_answer/sb_hangup tools so any MCP-capable agent (Claude Code, Codex, Gemini CLI) can patch through to another person's agent. Inbound peer text is always fenced as untrusted data.",
   "license": "MIT",
   "type": "module",

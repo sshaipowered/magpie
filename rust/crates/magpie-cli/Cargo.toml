@@ -1,6 +1,6 @@
 [package]
 name = "magpie-cli"
-version = "0.2.2"
+version = "0.3.0"
 edition.workspace = true
 license.workspace = true
 description = "Magpie CLI — the non-developer-simple `magpie` command (start｜join｜history｜report) on top of magpie-client. Mirror of packages/cli (TS reference)."
