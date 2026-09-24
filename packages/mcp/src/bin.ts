@@ -33,8 +33,8 @@ async function main(): Promise<void> {
   // the operator as an unexplained "server failed to start".
   const { extension, derived } = resolveExtension(process.env);
 
-  // Resolve the default relay: explicit env wins, else the hosted pointer file.
-  // Never throws — an unreachable pointer degrades to invite-only mode.
+  // Resolve the default relay: explicit env wins, else an optional operator pointer.
+  // Never throws — nothing configured or an unreachable pointer means invite-only.
   const relayUrl = await resolveDefaultRelay(process.env, {
     warn: (m) => process.stderr.write(`[magpie-mcp] ${m}\n`),
   });

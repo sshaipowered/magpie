@@ -32,14 +32,26 @@ describe('resolveDefaultRelay', () => {
     expect(fetchImpl).not.toHaveBeenCalled();
   });
 
-  it('fetches the pointer when no env override is set', async () => {
+  it('returns null and performs NO fetch when nothing is configured', async () => {
+    // The whole point of removing the hosted default: a fresh install must not
+    // reach out to any address we no longer control.
+    const fetchImpl = vi.fn();
     const url = await resolveDefaultRelay({} as NodeJS.ProcessEnv, {
-      fetchImpl: ok('wss://relay.fly.dev\n'),
+      fetchImpl: fetchImpl as unknown as typeof fetch,
     });
-    expect(url).toBe('wss://relay.fly.dev');
+    expect(url).toBeNull();
+    expect(fetchImpl).not.toHaveBeenCalled();
   });
 
-  it('disables the hosted default when MAGPIE_RELAY_POINTER is empty', async () => {
+  it('fetches MAGPIE_RELAY_POINTER when the operator hosts one', async () => {
+    const url = await resolveDefaultRelay(
+      { MAGPIE_RELAY_POINTER: 'https://team.example/relay.txt' } as NodeJS.ProcessEnv,
+      { fetchImpl: ok('ws://relay-laptop.local:8787\n') },
+    );
+    expect(url).toBe('ws://relay-laptop.local:8787');
+  });
+
+  it('treats an empty MAGPIE_RELAY_POINTER as unset', async () => {
     const fetchImpl = vi.fn();
     const url = await resolveDefaultRelay(
       { MAGPIE_RELAY_POINTER: '' } as NodeJS.ProcessEnv,
@@ -54,7 +66,7 @@ describe('resolveDefaultRelay', () => {
       throw new Error('offline');
     }) as unknown as typeof fetch;
     await expect(
-      resolveDefaultRelay({} as NodeJS.ProcessEnv, { fetchImpl: boom }),
+      resolveDefaultRelay({ MAGPIE_RELAY_POINTER: 'https://x/relay.txt' } as NodeJS.ProcessEnv, { fetchImpl: boom }),
     ).resolves.toBeNull();
   });
 
@@ -62,7 +74,7 @@ describe('resolveDefaultRelay', () => {
     const notFound: typeof fetch = (async () =>
       new Response('nope', { status: 404 })) as unknown as typeof fetch;
     await expect(
-      resolveDefaultRelay({} as NodeJS.ProcessEnv, { fetchImpl: notFound }),
+      resolveDefaultRelay({ MAGPIE_RELAY_POINTER: 'https://x/relay.txt' } as NodeJS.ProcessEnv, { fetchImpl: notFound }),
     ).resolves.toBeNull();
   });
 });

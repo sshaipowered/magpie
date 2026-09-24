@@ -5,15 +5,22 @@ ciphertext only** — the box operator cannot read pairing codes or call content
 and it is DoS-hardened (connection/IP caps, per-connection rate limit, bounded
 queues, 2 MiB frame cap, pending/call caps).
 
-## The relay pointer (why migration is a one-line edit)
+## Where clients find the relay
 
-Clients don't bake the relay address into their binary. The MCP resolves the
-default relay at startup from a stable pointer file — `site/relay.txt`, served
-at `https://sshaipowered.github.io/magpie/relay.txt`. To move the relay (spare
-laptop → cloud box, or a tunnel URL that changed), edit the one URL line in
-`site/relay.txt` and push; every agent follows on its next start. No re-release,
-no client reconfiguration. Users who set `MAGPIE_RELAY_URL` pin their own relay
-and ignore the pointer.
+There is no hosted relay and no project-wide pointer file any more. Clients
+resolve the relay in this order:
+
+1. `MAGPIE_RELAY_URL` — explicit. Use a `.local` hostname or a DHCP reservation,
+   not a bare DHCP IP: the starter's MCP reads this once at startup.
+2. `MAGPIE_RELAY_POINTER` — optional. An HTTPS text file *you* host whose first
+   `ws(s)://` line is the relay. Lets one operator move a team's relay by editing
+   one line instead of touching every machine.
+3. Nothing set — invite-only. Joiners paste `CODE@ws://…`; starters cannot mint
+   an invite until 1 or 2 is set.
+
+The project used to ship a default pointer on GitHub Pages. The account serving
+it was suspended, the pointer went 404, and every installed binary lost its
+relay at once. That is the failure mode a pointer you do not control buys you.
 
 ## Option A — spare Mac / any machine (free, no domain, no card)
 

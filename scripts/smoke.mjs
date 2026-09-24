@@ -62,7 +62,12 @@ const EM_DASH = String.fromCharCode(0x2014);
 const FENCE_BEGIN = `<<<UNTRUSTED PEER MESSAGE ${EM_DASH} BEGIN>>>`;
 const FENCE_END = `<<<UNTRUSTED PEER MESSAGE ${EM_DASH} END>>>`;
 
-const RELAY_POINTER = 'https://sshaipowered.github.io/magpie/relay.txt';
+// The relay is an argument, not a constant: the job spawns one from the same
+// archive it is testing and hands its bound address in. Nothing in this test
+// may depend on a relay anyone hosts. The last one that did was on Fly, died
+// silently, and turned 21 consecutive nightlies red for a reason that had
+// nothing to do with the release under test.
+const RELAY_URL = process.argv[3];
 
 const EXT = '@[a-z0-9][a-z0-9-]{0,30}\\/[a-z0-9][a-z0-9-]{0,30}';
 // The ready line, per bin.ts. The "(derived; …)" clause is REQUIRED here: this
@@ -153,6 +158,9 @@ function startMcp(label, binPath) {
   // this test at someone else's relay while still going green.
   const env = { ...process.env };
   for (const k of Object.keys(env)) if (/^magpie_/i.test(k)) delete env[k];
+  // The ONLY MAGPIE_* the children see. Set after the scrub so a runner-level
+  // value can never win over the relay this job actually started.
+  env.MAGPIE_RELAY_URL = RELAY_URL;
 
   // No `shell: true`. magpie-mcp(.exe) is a real executable, so CreateProcess
   // handles it directly; a shell would put cmd.exe in between and kill() would
@@ -317,7 +325,8 @@ function fencePayload(text, what) {
 
 async function main() {
   const arg = process.argv[2];
-  must(arg, 'usage: node scripts/smoke.mjs <path-to-magpie-mcp[.exe]>');
+  must(arg && RELAY_URL, 'usage: node scripts/smoke.mjs <path-to-magpie-mcp[.exe]> <ws(s)://relay>');
+  must(/^wss?:\/\//.test(RELAY_URL), `relay argument must be a ws(s):// URL, got ${RELAY_URL}`);
 
   // Always an absolute path: a bare name with no separator makes libuv search
   // PATH rather than the cwd, which on Windows also probes .cmd/.bat.
@@ -326,6 +335,32 @@ async function main() {
   must(existsSync(bin), `no such binary: ${bin}`);
   log(`binary:   ${bin}`);
   log(`platform: ${process.platform}/${process.arch}, node ${process.version}`);
+
+  // Before either MCP is spawned. A dead relay otherwise first shows up inside
+  // the negative-control step as "wrong failure mode, expected
+  // UNKNOWN_RENDEZVOUS", which is how 21 consecutive nightlies described a
+  // relay that had simply stopped existing. Name the real cause up front. The
+  // relay answers any non-JSON text frame with a BAD_FRAME error, so that reply
+  // is a positive liveness signature, not merely "the port accepted TCP".
+  step('relay answers on the wire before anything else is spawned');
+  await new Promise((resolve, reject) => {
+    const fail = (why) =>
+      reject(new Error(`relay ${RELAY_URL} is not usable: ${why}. Nothing below can pass; ` +
+        `this is the relay, not the release under test.`));
+    const timer = setTimeout(() => fail('no reply within 5s'), 5000);
+    let ws;
+    try { ws = new WebSocket(RELAY_URL); } catch (e) { clearTimeout(timer); return fail(e.message); }
+    ws.addEventListener('open', () => ws.send('x'));
+    ws.addEventListener('message', (ev) => {
+      clearTimeout(timer);
+      const txt = String(ev.data);
+      if (txt.includes('BAD_FRAME')) { ws.close(); resolve(); }
+      else fail(`unexpected reply ${txt.slice(0, 80)}`);
+    });
+    ws.addEventListener('error', () => { clearTimeout(timer); fail('connection error'); });
+    ws.addEventListener('close', (ev) => { clearTimeout(timer); fail(`closed before replying (code ${ev.code})`); });
+  });
+  log(`relay ${RELAY_URL} replied BAD_FRAME to a junk frame: alive`);
 
   // Three DIFFERENT nonces, one per direction. With a single nonce, a relay
   // that echoed our own query back would be indistinguishable from a peer that
@@ -340,7 +375,7 @@ async function main() {
   const A_TEXT = `smoke-answer ${A_NONCE} :: 한글 émoji ✓`;
   const R_TEXT = `AGREED ${R_NONCE} :: smoke complete`;
 
-  // Both children run with NO MAGPIE_* env at all.
+  // Both children run with NO MAGPIE_* env except MAGPIE_RELAY_URL (set by startMcp).
   //
   // Recon C specified distinct MAGPIE_EXTENSION values (@alice/planner /
   // @bob/impl) plus MAGPIE_ASK_TIMEOUT_MS, and its identity assertion
@@ -592,20 +627,14 @@ async function main() {
 }
 
 function parseReady(label, line) {
-  // Distinguish "the pointer never resolved" from "sb_start failed". Without
-  // this, a dead pointer file degrades the run to invite-only mode and the
-  // failure surfaces several steps later as an unrelated config error.
-  must(
-    !line.includes('(no default relay'),
-    `${label}: no default relay was resolved. The pointer ${RELAY_POINTER} failed or ` +
-      `carries no usable ws(s):// URL, so this process is in invite-only mode rather than ` +
-      `the zero-config path under test. Line: ${line}`,
-  );
   const m = line.match(READY_RE);
   must(m, `${label}: ready line did not match the expected shape: ${line}`);
+  // Exact equality with the relay this job started. A loose "starts with ws"
+  // check is how a stray env var could point the test at some other relay and
+  // still go green.
   must(
-    m[2].startsWith('wss://'),
-    `${label}: expected the hosted relay over wss://, got ${m[2]}`,
+    m[2] === RELAY_URL,
+    `${label}: expected the relay this job started (${RELAY_URL}), got ${m[2]}`,
   );
   return { ext: m[1], relay: m[2] };
 }

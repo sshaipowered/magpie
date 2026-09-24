@@ -1,23 +1,23 @@
 /**
- * Default-relay resolution via a STABLE POINTER.
+ * Default-relay resolution.
  *
- * The hosted default relay's address is NOT baked into the binary. Instead the
- * MCP resolves it at startup from a small text file served at a permanent URL
- * (GitHub Pages). Migrating the relay (spare laptop → cloud box, or a tunnel
- * URL that changed) is then a ONE-LINE edit to that file — no re-release, no
- * client reconfiguration. The relay only ever sees end-to-end-encrypted
- * ciphertext, so trusting an HTTPS-fetched address introduces no new exposure.
+ * There is NO hosted default relay and nothing is baked into the binary. A
+ * hosted default existed until 2026-09: its address lived in a pointer file on
+ * GitHub Pages, and the GitHub account that served it was suspended, which took
+ * the pointer down and left every installed binary unable to start a call. A
+ * relay you do not run is a dependency you cannot keep alive. Magpie is now
+ * self-host only.
  *
  * Resolution precedence:
- *   1. `MAGPIE_RELAY_URL`  — explicit override (self-host / pinning). Wins; no fetch.
- *   2. the pointer file    — the hosted default (this module).
- *   3. null                — invite-carried URLs only (joiners paste `CODE@ws://…`).
+ *   1. `MAGPIE_RELAY_URL`     — explicit relay. Wins; no network access.
+ *   2. `MAGPIE_RELAY_POINTER` — OPTIONAL: an HTTPS text file YOU host whose first
+ *                               ws(s):// line is the relay. Lets one operator move
+ *                               a team's relay without touching every machine.
+ *   3. null                   — invite-only: joiners paste `CODE@ws://…`, starters
+ *                               cannot mint an invite until 1 or 2 is set.
  *
- * Set `MAGPIE_RELAY_POINTER=''` (empty) to disable the fetch entirely.
+ * With neither variable set this module performs no fetch at all.
  */
-
-/** The permanent pointer URL. Its CONTENTS change; this address never does. */
-export const DEFAULT_RELAY_POINTER = 'https://sshaipowered.github.io/magpie/relay.txt';
 
 /** How long to wait on the pointer fetch before falling back to invite-only. */
 const FETCH_TIMEOUT_MS = 4000;
@@ -53,8 +53,8 @@ export interface ResolveOpts {
 }
 
 /**
- * Resolve the default relay URL. `MAGPIE_RELAY_URL` wins outright; otherwise the
- * pointer file is fetched. Any failure (offline, 404, malformed, timeout)
+ * Resolve the default relay URL. `MAGPIE_RELAY_URL` wins outright; otherwise a
+ * pointer file is fetched only if `MAGPIE_RELAY_POINTER` names one. Any failure (offline, 404, malformed, timeout)
  * resolves to null — the agent then works in invite-only mode instead of
  * crashing. Never throws.
  */
@@ -65,10 +65,11 @@ export async function resolveDefaultRelay(
   const explicit = env.MAGPIE_RELAY_URL?.trim();
   if (explicit) return explicit;
 
-  // An explicitly-empty pointer env disables the hosted default.
+  // An explicitly-empty pointer env is the same as unset: invite-only.
   const pointerRaw = env.MAGPIE_RELAY_POINTER;
   if (pointerRaw !== undefined && pointerRaw.trim() === '') return null;
-  const pointerUrl = opts.pointerUrl ?? pointerRaw?.trim() ?? DEFAULT_RELAY_POINTER;
+  const pointerUrl = opts.pointerUrl ?? pointerRaw?.trim();
+  if (!pointerUrl) return null; // nothing configured: invite-only, and no network call
 
   const doFetch = opts.fetchImpl ?? fetch;
   try {

@@ -1,5 +1,5 @@
 # Download the ACTUAL released archive for each platform and drive a real
-# two-party call through the real hosted relay.
+# two-party call through a relay spawned from that same archive.
 #
 # release.yml builds five platforms and runs none of them; ci.yml runs 230 tests
 # on one ubuntu box against source. Nothing in between ever executed a shipped
@@ -34,8 +34,9 @@ on:
         required: false
         default: latest
 
-  # An unchanged release going red overnight means the relay or the pointer file
-  # regressed, not the binaries. Nothing else separates those two causes.
+  # An unchanged release going red overnight means the runner image or the
+  # published install script moved, not the binaries: the relay is spawned from
+  # the archive under test, so it cannot be the cause.
   # Not a safety net on its own: GitHub drops scheduled runs under load, and
   # disables them outright after 60 days without repo activity.
   schedule:
@@ -89,19 +90,6 @@ jobs:
           echo "tag=$TAG" >> "$GITHUB_OUTPUT"
           echo "version=magpie ${TAG#v}" >> "$GITHUB_OUTPUT"
           echo "smoke-testing $TAG"
-
-      # A hosted-relay or Pages outage would otherwise red all four legs at once
-      # and read exactly like a four-platform product regression. Fail here
-      # instead, with a message that says which it was.
-      - name: Pre-flight the hosted relay pointer
-        shell: bash
-        run: |
-          set -euo pipefail
-          if ! curl -fsS --retry 5 --retry-all-errors --max-time 30 \
-              https://sshaipowered.github.io/magpie/relay.txt | grep -qE '^wss?://'; then
-            echo "relay pointer unreachable or malformed — infrastructure, not the release" >&2
-            exit 1
-          fi
 
   smoke:
     needs: resolve
@@ -209,40 +197,42 @@ jobs:
           fi
           echo "$actual"
 
-      # magpie-relay ships in every archive and would otherwise be the one
-      # binary nothing ever executes: the call under test goes through the
-      # HOSTED relay, so a self-host relay that cannot start on a platform would
-      # pass the whole matrix. It takes a port from argv and announces its bound
-      # address on stderr; port 0 lets the OS pick so concurrent legs cannot
-      # collide.
-      - name: Assert the released relay binary starts
-        if: runner.os != 'Windows'
-        shell: bash
-        run: |
-          set -euo pipefail
-          ./bin/magpie-relay 0 > relay.log 2>&1 &
-          pid=$!
-          for _ in $(seq 1 50); do
-            grep -q "listening on" relay.log && break
-            sleep 0.2
-          done
-          kill "$pid" 2>/dev/null || true
-          grep -q "listening on" relay.log || { echo "magpie-relay never announced a listener:" >&2; cat relay.log >&2; exit 1; }
-          cat relay.log
-
       # Only the driver (.mjs) needs Node. Pinned so a runner-image Node bump
       # cannot change the result.
       - uses: actions/setup-node@v4
         with: { node-version: 22 }
 
+      # The relay comes from the SAME archive as the MCP under test, started here
+      # and torn down here. There is no hosted relay: the last one died on Fly
+      # and reddened 21 nightlies in a row for a reason unrelated to any release.
+      # Running it in this step rather than an earlier one is deliberate; a
+      # background process is not guaranteed to survive a step boundary on every
+      # runner, and a relay that quietly died between steps would surface as an
+      # unrelated join failure.
+      #
+      # Port 0 lets the OS pick, so concurrent legs cannot collide. `shell: bash`
+      # on every platform: Git Bash on the Windows image handles `&`, `kill` and
+      # the trap the same way.
+      #
       # No continue-on-error, no `|| true`, no `if: always()`: the step's exit
       # code IS the platform's verdict, and Windows is the whole reason this
       # file exists.
-      - name: Two-party call over the hosted relay
+      - name: Two-party call through a relay from the same archive
         shell: bash
         run: |
           set -euo pipefail
-          node scripts/smoke.mjs "bin/magpie-mcp${{ matrix.exe }}"
+          ./bin/magpie-relay${{ matrix.exe }} 0 > relay.log 2>&1 &
+          relay_pid=$!
+          trap 'kill "$relay_pid" 2>/dev/null || true' EXIT
+          for _ in $(seq 1 50); do
+            grep -q "listening on" relay.log && break
+            sleep 0.2
+          done
+          grep -q "listening on" relay.log || { echo "magpie-relay never announced a listener:" >&2; cat relay.log >&2; exit 1; }
+          port="$(tr -d '\r' < relay.log | sed -n 's/.*listening on ws:\/\/[^:]*:\([0-9][0-9]*\).*/\1/p' | head -1)"
+          test -n "$port" || { echo "could not parse the relay port from:" >&2; cat relay.log >&2; exit 1; }
+          echo "relay: ws://127.0.0.1:$port"
+          node scripts/smoke.mjs "bin/magpie-mcp${{ matrix.exe }}" "ws://127.0.0.1:$port"
 
   # Everything above downloads the release archive by hand. NOBODY does that —
   # the README tells people to pipe a script off Pages into their shell, and
@@ -420,4 +410,4 @@ jobs:
 
           gh issue create --repo "$REPO" --label watchdog \
             --title "Nightly smoke is failing" \
-            --body "$(printf 'The scheduled smoke run went red against the current release.\n\n- released-binary matrix: **%s**\n- install one-liner (front door): **%s**\n\n%s\n\nThe binaries under test did not change, so a failure here means the hosted relay, the relay pointer, or the published install script moved. This issue closes itself when a later nightly comes back green.' "$SMOKE" "$FRONTDOOR" "$RUN_URL")"
+            --body "$(printf 'The scheduled smoke run went red against the current release.\n\n- released-binary matrix: **%s**\n- install one-liner (front door): **%s**\n\n%s\n\nThe binaries under test did not change and the relay is spawned locally, so a failure here means the runner image or the published install script moved. This issue closes itself when a later nightly comes back green.' "$SMOKE" "$FRONTDOOR" "$RUN_URL")"

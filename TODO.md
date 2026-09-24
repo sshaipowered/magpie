@@ -306,6 +306,33 @@ and the test proves only that the file parses. CI now installs a real MCP host
 first, then asserts the written config points at a path that exists and that
 `MAGPIE_EXTENSION` was NOT written (the v0.2.1 derivation must own the address).
 
+### Scope decision (2026-09-23): internal tool, self-host only, no hosted relay
+The Fly relay died silently between 8/24 and 9/3. The nightly caught it
+(21 consecutive reds, watchdog issue #1 opened on schedule), but the pointer
+that was supposed to make relay migration a one-line edit was itself served
+from a GitHub account that got suspended a month earlier. Two hosted things,
+two silent deaths. A relay you do not run is a dependency you cannot keep alive.
+
+Decision (owner): Magpie is an internal team tool. Public availability, binary
+signing, npm publish, marketplace listing, and the Nostr transport idea are all
+out of scope. The relay is a spare laptop on the LAN; `MAGPIE_RELAY_URL` on the
+starting side points at it by `.local` hostname (not a DHCP IP: the MCP reads
+the variable once at startup). Tailscale deferred until a peer is off-LAN.
+
+Done in this commit: hosted default removed from `relay-pointer.ts` (no fetch
+unless the operator sets `MAGPIE_RELAY_POINTER`), `site/relay.txt` deleted,
+smoke workflow spawns the relay from the archive under test instead of dialing
+one on the internet, README/installers/SECURITY rewritten for self-host only.
+
+Next (AX handoff, decided with the a reviewer session): (1) `sb_resolve` returns
+CallReport JSON as structured content and persists to `~/.magpie/calls/`,
+(2) `{summary, agreed[], contested[]}` inside the sealed resolve content —
+wire unchanged, TS only, (3) per-user key fingerprint in CallReport for
+attribution (not authentication; no signature check). Then the first real
+A (Claude Code) ↔ B (Codex) call. Falsification: after 3 calls, if
+`contested[]` is empty while the transcript shows divergence, drop the field
+and extract post-hoc on the AX side.
+
 ### ✅ Contributor-ready (2026-08-17)
 `SECURITY.md` (private reporting enabled, known trade-offs listed so nobody
 rediscovers a documented one), `CONTRIBUTING.md`, `CODEOWNERS`, branch

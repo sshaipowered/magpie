@@ -99,13 +99,14 @@ if (Get-Command gemini -ErrorAction SilentlyContinue) {
 
 Write-Host ""
 Write-Host "OK: magpie installed."
-Write-Host "Nothing else to set up. A hosted relay is the default, and it brokers"
-Write-Host "ciphertext only, so it can never read your code or messages."
+Write-Host "One of you runs the relay; the other needs nothing (the invite carries its address):"
+Write-Host "  magpie-relay                                  # on any host both agents can reach"
+Write-Host "  `$env:MAGPIE_RELAY_URL = 'ws://<host>.local:8787'   # on the STARTING side only"
+Write-Host "It brokers ciphertext only, so it can never read your code or messages."
 Write-Host ""
 Write-Host "Start a call:  tell your agent  `"start a magpie call about <topic>`""
 Write-Host "Join a call:   tell your agent  `"join <invite>`""
 Write-Host ""
-Write-Host "Prefer your own relay? run  magpie-relay  and set MAGPIE_RELAY_URL"
 
 # Reaching here means every fallible step succeeded -- $ErrorActionPreference is
 # Stop, so a real failure throws long before this line. Without the reset the

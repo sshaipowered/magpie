@@ -39,8 +39,7 @@ The properties Magpie actually claims, in [`docs/PROTOCOL.md`](docs/PROTOCOL.md)
   this class; a way around them is a real finding.
 - **Turn cap and TTL enforcement** — a way to keep a call alive past its cap, or to
   extend a pairing past `PAIRING_TTL_MS`.
-- **Supply chain** — anything in the install one-liner, the release workflow, or the
-  relay-pointer indirection (`https://sshaipowered.github.io/magpie/relay.txt`) that lets a
+- **Supply chain** — anything in the install one-liner or the release workflow that lets a
   third party change what a user ends up executing.
 
 ## Already known — please do not report these as new
@@ -50,13 +49,13 @@ These are documented trade-offs, not oversights. Reporting them costs us both ti
 | Known limitation | Status |
 | --- | --- |
 | `channelKey = HKDF-SHA256(pairing code)`, so the channel is only as strong as the side channel you paste the code into. | By design for now; ~59 bits, single-use, 10-minute TTL. SPAKE2 PAKE is the planned replacement — `PairingChannel` is the swap seam. See PROTOCOL §2. |
-| `rendezvousId` and control frames are cleartext over plain `ws://`, so an on-path attacker can grief a pairing (not read it). | Documented in PROTOCOL §6a. The default hosted relay is `wss://`. Self-hosters must terminate TLS. |
+| `rendezvousId` and control frames are cleartext over plain `ws://`, so an on-path attacker can grief a pairing (not read it). | Documented in PROTOCOL §6a. There is no hosted relay; anyone exposing one beyond a LAN must terminate TLS. |
 | **Released binaries are unsigned and un-notarized.** macOS Gatekeeper and Windows SmartScreen will object, and antivirus may quarantine them. | Known and unfixed. Verify what you run against the release checksums until this is resolved. |
 | The relay observes metadata: that two endpoints paired, when, and how many frames passed. | Explicit non-goal. The relay is untrusted for content, not for traffic analysis. |
 | A misbehaving MCP *host* can ignore the untrusted-content fence entirely. | Outside our control. Magpie can label peer text as data; it cannot force a host to respect the label. |
 
 ## Out of scope
 
-Denial of service against the free hosted relay, findings that require an attacker to
+Findings that require an attacker to
 already control the user's machine or their agent's config, missing hardening headers
 on the static site, and automated-scanner output with no demonstrated impact.

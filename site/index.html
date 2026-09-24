@@ -211,7 +211,7 @@ footer .tail{font-size:12.5px;color:var(--dim)}
       <div class="step"><div class="n">01</div><h3>Install &amp; forget</h3>
         <p>One <code>curl | sh</code> installs the binaries and registers the MCP server with the agents on your machine. Both sides do this once.</p></div>
       <div class="step"><div class="n">02</div><h3>Share one token</h3>
-        <p>Tell your agent to start a call. It prints an invite like <code>K7F3-9M2P-XQ4R@wss://magpie-relay.fly.dev</code>: code and relay in one line. Your partner pastes it. That's the whole setup.</p></div>
+        <p>Tell your agent to start a call. It prints an invite like <code>K7F3-9M2P-XQ4R@ws://relay-laptop.local:8787</code>: code and relay in one line. Your partner pastes it. That's the whole setup.</p></div>
       <div class="step"><div class="n">03</div><h3>They hash it out</h3>
         <p>The agents question, verify against their own repos, and push back — multi-turn — until they reach a firm conclusion, then hang up and report to both humans.</p></div>
     </div>
@@ -246,7 +246,7 @@ footer .tail{font-size:12.5px;color:var(--dim)}
       <div class="tabpane">
         <pre data-t="0">curl -fsSL https://sshaipowered.github.io/magpie/install.sh | sh</pre>
         <pre data-t="1" hidden>irm https://sshaipowered.github.io/magpie/install.ps1 | iex</pre>
-        <pre data-t="2" hidden>magpie-relay   <i># any host both agents can reach — a laptop on Tailscale is plenty</i></pre>
+        <pre data-t="2" hidden>magpie-relay   <i># any host both agents can reach — a spare laptop on your LAN is plenty</i></pre>
       </div>
     </div>
   </section>
@@ -274,8 +274,8 @@ const script=[
  [L,"c-h","> verify bob's implementation matches my risk spec"],
  [L,"c-t","⚡ sb_start  topic: \"agbot risk rules\""],
  [L,"c-a","invite — share with bob:"],
- [L,"c-code","   K7F3-9M2P-XQ4R@wss://magpie-relay.fly.dev"],
- [R,"c-h","> join K7F3-9M2P-XQ4R@wss://magpie-relay.fly.dev"],
+ [L,"c-code","   K7F3-9M2P-XQ4R@ws://relay-laptop.local:8787"],
+ [R,"c-h","> join K7F3-9M2P-XQ4R@ws://relay-laptop.local:8787"],
  [R,"c-t","⚡ sb_join   → connected to @alice/planner"],
  [L,"c-t","⚡ sb_ask   \"Per-trade risk limit — spec says 2%. Where is it enforced?\""],
  [R,"c-in","📨 Per-trade risk limit — spec says 2%. Where is it enforced?"],

@@ -34,7 +34,7 @@ One handshake, then unlimited automatic round trips — strictly cheaper than re
 
 ## Quickstart
 
-No accounts, no config, no server to run. A hosted relay is the default, so install is the whole setup.
+No accounts, no config files, no hosted service. One of you runs the relay; the other needs nothing.
 
 **1. Install** (both people, once):
 
@@ -47,32 +47,36 @@ Single static binaries (`magpie`, `magpie-relay`, `magpie-mcp`) into `~/.magpie/
 
 > Gemini CLI users: Gemini gates MCP servers behind *folder trust*. If `gemini mcp list` shows magpie as `Disabled`, that is the gate, not a broken install — trust the folder.
 
-**2. Just talk to your agent:**
+**2. Run the relay** (one machine both agents can reach, e.g. a spare laptop on your LAN):
+
+```bash
+magpie-relay                      # → listening on ws://0.0.0.0:8787
+```
+
+The relay brokers **ciphertext only**. It cannot read your code or messages, so where it runs is a reachability question, not a trust one. Keep it up with `launchd`/`systemd` if it is meant to stay up.
+
+**3. Point the *starting* side at it** — the joining side needs nothing, the invite carries the address:
+
+```bash
+export MAGPIE_RELAY_URL=ws://relay-laptop.local:8787   # a hostname, not a DHCP IP
+```
+
+Use a `.local` name (mDNS, built into macOS and most Linux) or a DHCP reservation. A raw IP goes stale the day the router hands out a different one, and the starter's MCP only reads this variable at startup.
+
+**4. Just talk to your agent:**
 
 ```
 You → agent:            "start a magpie call about the agbot risk limit"
-agent → you:            invite K7F3-9M2P-XQ4R@wss://magpie-relay.fly.dev   # ONE token: code + relay
-partner → their agent:  "join K7F3-9M2P-XQ4R@wss://magpie-relay.fly.dev"
+agent → you:            invite K7F3-9M2P-XQ4R@ws://relay-laptop.local:8787   # ONE token: code + relay
+partner → their agent:  "join K7F3-9M2P-XQ4R@ws://relay-laptop.local:8787"
 # the two agents exchange Q&A autonomously until they agree, then summarize to both of you.
 ```
-
-That's it. The invite carries the relay address, so the joiner configures nothing.
 
 Your agent's address defaults to `@<your-username>/main`. Set `MAGPIE_EXTENSION=@you/role` to pick a different one (useful when you run several agents).
 
 Prefer a human at the keyboard instead of an agent? The `magpie` CLI (Rust, single binary) does `start` / `join` interactively.
 
-### Run your own relay (optional)
-
-The default relay brokers **ciphertext only** and can never read your code or messages, but nothing stops you from running your own. It is the same ~1 MB binary you already installed:
-
-```bash
-magpie-relay                      # → listening on ws://0.0.0.0:8787
-# …or from source, in ./rust:  cargo run --release -p magpie-relay
-# …or Docker:  docker build -t magpie-relay rust/ && docker run -p 8787:8787 magpie-relay
-```
-
-Then point the *starting* side at it with `MAGPIE_RELAY_URL=ws://<host>:8787` (put it behind a TLS reverse proxy for `wss://` on the public internet; see [`deploy/relay/`](deploy/relay/)). The joining side still needs nothing, since the invite carries the address.
+**Beyond one LAN:** put the relay behind a TLS reverse proxy for `wss://` (see [`deploy/relay/`](deploy/relay/)), or join both machines to a tailnet. There is deliberately no relay run by this project: one that you do not operate is a dependency you cannot keep alive, and the last one proved it.
 
 **From source instead of the installer:**
 
@@ -105,4 +109,4 @@ See [`docs/PROTOCOL.md`](docs/PROTOCOL.md) for the full handshake and threat mod
 
 ## Status
 
-Working core, MIT licensed. Agent↔agent calls (query → answer → mutual agreement → report) run cross-machine, end-to-end encrypted, over MCP, verified live across vendors (Claude ↔ Gemini). The relay/protocol/client/CLI have a **Rust implementation** (single static binaries; relay ~1 MB) alongside the TypeScript reference packages, verified byte-compatible on the wire and crypto. Install via the one-liner above; the npm packages are not published yet, so the from-source path is still `node packages/mcp/dist/bin.js`.
+Working core, MIT licensed. Agent↔agent calls (query → answer → mutual agreement → report) run cross-machine, end-to-end encrypted, over MCP, verified live across vendors (Claude ↔ Gemini). The relay/protocol/client/CLI have a **Rust implementation** (single static binaries; relay ~1 MB) alongside the TypeScript reference packages, verified byte-compatible on the wire and crypto. **Self-host only**: there is no hosted relay. Install via the one-liner above; the npm packages are not published yet, so the from-source path is still `node packages/mcp/dist/bin.js`.
