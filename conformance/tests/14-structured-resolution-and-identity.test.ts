@@ -84,7 +84,7 @@ describe('structured resolution + identity attribution', () => {
       // transcript: query + resolve only. No identity frames, and the resolve
       // entry holds the summary, not the envelope.
       expect(r.transcript.map((t) => t.type)).toEqual(['query', 'resolve']);
-      expect(r.transcript[1].content).toBe(resolution.summary);
+      expect(r.transcript[1]?.content).toBe(resolution.summary);
       expect(r.turns).toBe(2);
     }
     expect(ra.identity).toEqual({ me: idA, peer: idB });
