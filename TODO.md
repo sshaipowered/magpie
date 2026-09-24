@@ -353,7 +353,13 @@ a partner-only "Joining a call" section, a shared-tailnet procedure for
 different networks (invite step and macOS app-not-CLI were the two things a
 3-line sketch would have got wrong), update/uninstall, five troubleshooting
 lines, Codex/Gemini from-source registration, and the fingerprint is read from
-the report rather than from stderr the MCP host hides. Falsification: after 3 calls, if
+the report rather than from stderr the MCP host hides.
+Follow-up from the same review: shell `export MAGPIE_RELAY_URL` never reaches
+GUI-launched hosts (Claude Desktop, VS Code, Codex app), which is the team's
+default. README now shows the two working paths (say the relay in the prompt;
+bake it into the registration with `-e/--env`). Installer enhancement worth
+doing: accept `MAGPIE_RELAY_URL` at install time and pass it into every
+`mcp add`, so the starter's setup is one line. Not done yet. Falsification: after 3 calls, if
 `contested[]` is empty while the transcript shows divergence, drop the field
 and extract post-hoc on the AX side.
 

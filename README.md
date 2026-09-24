@@ -62,13 +62,26 @@ magpie-relay                      # → listening on ws://0.0.0.0:8787
 
 The relay brokers **ciphertext only**. It cannot read your code, your messages, or the call topic, so where it runs is a reachability question, not a trust one. It does see who is talking to whom and how much. Keep it up with `launchd`/`systemd` if it is meant to stay up.
 
-**3. Point the *starting* side at it** — the joining side needs no configuration, the invite carries the address:
+**3. Tell the *starting* side which relay to use** — the joining side needs no configuration, the invite carries the address. Two ways:
 
-```bash
-export MAGPIE_RELAY_URL=ws://relay-laptop.local:8787   # same LAN: a .local name, not a DHCP IP
+*Say it in the prompt.* Works in every host, nothing to configure:
+
+```
+"start a magpie call on relay ws://relay-laptop.local:8787 about the agbot risk limit"
 ```
 
-Use a `.local` name (mDNS, built into macOS and most Linux) or a DHCP reservation. A raw IP goes stale the day the router hands out a different one, and the starter's MCP reads this variable once, at startup. **On different networks, `.local` does not resolve at all** — see [Not on the same LAN](#not-on-the-same-lan) before this step.
+*Or bake it into the MCP registration*, so you never repeat it. **Not a shell `export`:** GUI-launched hosts (Claude Desktop, VS Code/Cursor extensions, the Codex app) do not inherit your shell, so the MCP would never see the variable. Put it where the host starts the server:
+
+```bash
+claude mcp remove magpie -s user
+claude mcp add magpie -s user -e MAGPIE_RELAY_URL=ws://relay-laptop.local:8787 -- ~/.magpie/bin/magpie-mcp
+codex  mcp add magpie --env MAGPIE_RELAY_URL=ws://relay-laptop.local:8787 -- ~/.magpie/bin/magpie-mcp
+gemini mcp add -s user -e MAGPIE_RELAY_URL=ws://relay-laptop.local:8787 magpie ~/.magpie/bin/magpie-mcp
+```
+
+Then restart the agent; the MCP reads the variable once, at startup. A plain `export` in your shell only reaches a CLI host launched from that same shell.
+
+Use a `.local` name (mDNS, built into macOS and most Linux) or a DHCP reservation, not a raw IP: it goes stale the day the router hands out a different one. **On different networks, `.local` does not resolve at all** — see [Not on the same LAN](#not-on-the-same-lan) before this step.
 
 **4. Just talk to your agent:**
 
@@ -91,7 +104,7 @@ You received an invite line. This is everything you need to do:
 
 1. **Install** (step 1 above), then **restart your agent** and confirm `claude mcp list` (or `codex mcp list` / `gemini mcp list`) shows `magpie`.
 2. **Same LAN as the relay?** Nothing more. **Different network?** Accept the starter's Tailscale invitation first — see the next section.
-3. **Tell your agent to join**, pasting the whole invite line exactly as sent: `join K7F3-9M2P-XQ4R@ws://relay-laptop.local:8787`. The relay address is inside the invite; you set no variables.
+3. **Tell your agent to join**, pasting the whole invite line exactly as sent: `join K7F3-9M2P-XQ4R@ws://relay-laptop.local:8787`. The relay address is inside the invite; you set no variables. Invites expire after 10 minutes and work once, so paste it as soon as you get it.
 4. Your agent handles the conversation and reports the conclusion when the call ends. The full report is at `~/.magpie/calls/<callId>.json`.
 
 ### Not on the same LAN
@@ -100,10 +113,10 @@ You received an invite line. This is everything you need to do:
 
 1. **Relay host:** install [Tailscale](https://tailscale.com), sign in, and invite your partner from the admin console (**Users → Invite**). The free Personal plan covers a small team.
 2. **Partner:** install the Tailscale app (macOS/Windows: the app — on macOS the CLI lives inside the app bundle, so use the app; Linux: `tailscale up`) and sign in through the invitation. You are now on the same tailnet.
-3. **Starter:** use the relay host's MagicDNS name instead of `.local`. It survives IP and network changes:
+3. **Starter:** use the relay host's MagicDNS name instead of `.local`, in the prompt or in the registration exactly as in step 3 above. It survives IP and network changes:
 
-```bash
-export MAGPIE_RELAY_URL=ws://relay-laptop.<your-tailnet>.ts.net:8787
+```
+"start a magpie call on relay ws://relay-laptop.<your-tailnet>.ts.net:8787 about ..."
 ```
 
 If your partner cannot install anything, put the relay behind a TLS reverse proxy (`wss://`, see [`deploy/relay/`](deploy/relay/)) or a Cloudflare Tunnel and use that public `wss://` URL in step 3 instead. Whoever runs that endpoint sees the relay's metadata (addresses, sizes, timing), never the content or topic.
@@ -124,7 +137,7 @@ Then remove the `# magpie` PATH line from `~/.zshrc` or `~/.bashrc` (Windows: th
 ### Troubleshooting
 
 - **`sb_start` fails with connection refused** (starter): the relay is not running, or `MAGPIE_RELAY_URL` names the wrong host. Start `magpie-relay` where the variable points.
-- **Changed `MAGPIE_RELAY_URL` and nothing changed** (starter): the MCP reads it once at startup. Restart your agent session. The joiner never needs this variable.
+- **Set `MAGPIE_RELAY_URL` and the call still starts in invite-only mode** (starter): either the MCP was already running (it reads the variable once, at startup — restart the agent), or you exported it in a shell and your host is a GUI app that never saw it. Put it in the MCP registration (step 3) or say the relay in the prompt. The joiner never needs this variable.
 - **macOS asks whether `magpie-relay` may accept incoming connections** (relay host): the binaries are unsigned, so the application firewall prompts. Click Allow; it may ask again after an update.
 - **Joiner gets `UNKNOWN_RENDEZVOUS`**: the code expired (10 minutes, single use) or was mistyped. Ask for a fresh invite.
 - **`magpie: command not found` right after installing**: the installer added `~/.magpie/bin` to your PATH for *new* shells. Open a new terminal.
