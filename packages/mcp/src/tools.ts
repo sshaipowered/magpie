@@ -185,23 +185,37 @@ export function registerMagpieTools(server: McpServer, store: SessionStore): voi
           .min(1)
           .max(256 * 1024)
           .describe('The question to send to the peer. This is YOUR text; the peer sees it as data.'),
+        waitMs: z
+          .number()
+          .int()
+          .positive()
+          .optional()
+          .describe(
+            'Upper bound on THIS call. Return before this even if the peer has not answered ' +
+              'or has not yet joined. A late reply is queued for sb_listen.',
+          ),
       },
     },
-    async ({ callId, question }, extra) =>
+    async ({ callId, question, waitMs }, extra) =>
       guarded(async () => {
         const session = store.require(callId);
-        // Bounded, and cancellation-aware. A host that times out this call sends
-        // notifications/cancelled and the SDK aborts `extra.signal`; the ask is
-        // then DETACHED rather than left waiting on a promise nobody reads, so a
-        // reply arriving afterwards lands in the inbound queue for sb_listen
-        // instead of being consumed and lost.
-        const reply = await session.askBounded(question, {
+        // Bounded and cancellation-aware. A host that times out this call sends
+        // notifications/cancelled and the SDK aborts `extra.signal`; the deadline
+        // ALSO covers pairing, so a pre-join abort or a short waitMs stops the
+        // question from ever being sent. Truthful termination: `sent` and
+        // `not-sent` are separate outcomes.
+        const outcome = await session.askBounded(question, {
+          ...(waitMs !== undefined ? { waitMs } : {}),
           ...(extra?.signal ? { signal: extra.signal } : {}),
         });
-        if (!reply) {
+        if (outcome.state === 'answered') {
+          // The peer's answer is untrusted: fence it before the model sees it.
+          return ok(renderInbound(outcome.reply));
+        }
+        if (outcome.state === 'sent') {
           return ok(
             [
-              `Question sent on ${callId}, no reply yet.`,
+              `Question SENT on ${callId} (id ${outcome.queryId}), no reply yet.`,
               ``,
               `The peer is still working. Call sb_listen(callId=${callId}) to pick up`,
               `their answer when it arrives; it is queued, not lost. Do NOT resend the`,
@@ -209,8 +223,19 @@ export function registerMagpieTools(server: McpServer, store: SessionStore): voi
             ].join('\n'),
           );
         }
-        // The peer's answer is untrusted: fence it before the model sees it.
-        return ok(renderInbound(reply));
+        // not-sent: the wait ran out before pairing, so nothing left this process.
+        const why =
+          outcome.reason === 'cancelled'
+            ? 'the caller cancelled before a peer joined.'
+            : 'the wait bound expired before a peer joined.';
+        return ok(
+          [
+            `Question NOT SENT on ${callId}: ${why}`,
+            ``,
+            `The peer never received it. If you want to reach them, call sb_ask again`,
+            `after confirming a peer is on the call (sb_listen returns their messages).`,
+          ].join('\n'),
+        );
       }),
   );
 
@@ -238,10 +263,17 @@ export function registerMagpieTools(server: McpServer, store: SessionStore): voi
           .describe('How long to wait for an inbound query before returning a "nothing yet" notice.'),
       },
     },
-    async ({ callId, timeoutMs }) =>
+    async ({ callId, timeoutMs }, extra) =>
       guarded(async () => {
         const session = store.require(callId);
-        const msg = await session.nextInbound(timeoutMs);
+        // Cancellation-aware. Without the signal, an RPC that the host abandons
+        // would leave the parked #waitingListener set; the next ingest would
+        // hand the message to a promise nobody reads and it would never reach
+        // the queue. See CallSession.nextInbound.
+        const msg = await session.nextInbound(
+          timeoutMs,
+          extra?.signal ?? undefined,
+        );
         if (!msg) {
           const info = session.info();
           return ok(
@@ -267,7 +299,25 @@ export function registerMagpieTools(server: McpServer, store: SessionStore): voi
             asStructured(report),
           );
         }
-        // Surface the message id so the model can pass it to sb_answer as inReplyTo.
+        // A response arrives here only when it is UNMATCHED — the sb_ask that
+        // sent the original question already returned (state=sent or the caller
+        // aborted). It is already an answer; telling the model to answer it
+        // invites duplicate work. Preserve the correlation to the original
+        // question so the model knows which ask this settles.
+        if (msg.type === 'response') {
+          const parts = [
+            `Recovered response on ${callId} (id ${msg.id}` +
+              (msg.inReplyTo ? `, in reply to your earlier question ${msg.inReplyTo}` : '') +
+              `).`,
+            ``,
+            renderInbound(msg),
+            ``,
+            `Previous question answered; evaluate this reply and send a NEW follow-up`,
+            `if needed. Do NOT resend the earlier question. Do NOT call sb_answer.`,
+          ];
+          return ok(parts.join('\n'));
+        }
+        // A peer query the model must now answer.
         return ok(
           [
             `Inbound message id: ${msg.id}  (use as inReplyTo in sb_answer)`,

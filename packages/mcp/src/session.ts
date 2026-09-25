@@ -41,6 +41,17 @@ interface AwaitedReply {
   timer: ReturnType<typeof setTimeout>;
 }
 
+/**
+ * The three ways `askBounded` can conclude. The tool layer maps each to a
+ * different message for the model; conflating them (e.g. treating `not-sent`
+ * as `sent`) invites the agent to think a question was delivered when it
+ * never left this process.
+ */
+export type AskOutcome =
+  | { state: 'answered'; reply: Message }
+  | { state: 'sent'; queryId: string }
+  | { state: 'not-sent'; reason: 'timeout' | 'cancelled' };
+
 export interface SessionInfo {
   callId: string;
   /** This endpoint's extension address. */
@@ -191,21 +202,30 @@ export class CallSession {
   /**
    * Resolve once the peer has joined; reject if the call closes first or the
    * wait exceeds `timeoutMs`. Resolves immediately if the peer is already here.
+   *
+   * `signal` cancels the waiter cleanly: the timer is cleared, the waiter is
+   * removed from the set, and the returned promise rejects. Without this, an
+   * `askBounded` that gave up on pairing left a 10-minute setTimeout alive.
    */
-  #waitForPeer(timeoutMs: number): Promise<void> {
+  #waitForPeer(timeoutMs: number, signal?: AbortSignal): Promise<void> {
     if (this.peer) return Promise.resolve();
     if (this.#closed) {
       return Promise.reject(new Error(`call ${this.callId} closed: ${this.#closedReason}`));
+    }
+    if (signal?.aborted) {
+      return Promise.reject(new Error('peer-wait cancelled before it started'));
     }
     return new Promise<void>((resolve, reject) => {
       const waiter = {
         resolve: () => {
           clearTimeout(timer);
+          signal?.removeEventListener('abort', onAbort);
           this.#peerWaiters.delete(waiter);
           resolve();
         },
         reject: (e: Error) => {
           clearTimeout(timer);
+          signal?.removeEventListener('abort', onAbort);
           this.#peerWaiters.delete(waiter);
           reject(e);
         },
@@ -222,6 +242,8 @@ export class CallSession {
         timeoutMs,
       );
       if (typeof timer === 'object' && 'unref' in timer) timer.unref();
+      const onAbort = (): void => waiter.reject(new Error('peer-wait cancelled'));
+      signal?.addEventListener('abort', onAbort, { once: true });
       this.#peerWaiters.add(waiter);
     });
   }
@@ -306,16 +328,24 @@ export class CallSession {
   }
 
   /**
-   * Like `ask`, but stops WAITING after `waitMs` and returns null instead of
-   * rejecting, leaving the peer free to answer late.
+   * Like `ask`, but stops WAITING after `waitMs` and returns a structured
+   * outcome instead of rejecting, so the caller can distinguish three cases:
    *
-   * The reason this exists: an MCP host gives up on a tool call after its own
-   * deadline and tells the server nothing. The ask stayed registered, so when
-   * the reply finally arrived `ingest` matched it to a promise nobody was
-   * awaiting any more, consumed it, and never queued it — the peer's answer was
-   * in the transcript but unreachable through sb_listen. Ending the wait here
-   * and DETACHING the ask makes that same reply fall through to the inbound
-   * queue, where sb_listen picks it up.
+   *   - `answered`  the peer replied within the wait
+   *   - `sent`      the question was on the wire, no reply yet (queued for
+   *                 sb_listen when it arrives)
+   *   - `not-sent`  the wait ran out or the caller aborted while still
+   *                 waiting to pair; nothing reached the peer
+   *
+   * The distinction matters for the tool output: telling the model "the peer
+   * already has it" when the question never left this process invites the
+   * agent to think it can drop the topic. Truthful termination is the contract.
+   *
+   * The deadline and abort signal both cover the WHOLE operation (pairing
+   * included). An MCP host that times out a tool call sends
+   * notifications/cancelled and the SDK aborts `signal`; a caller that only
+   * passes `waitMs` gets the same bound. Neither path was covered pre-fix:
+   * pairing awaited unconditionally before either was armed.
    */
   async askBounded(
     question: string,
@@ -325,41 +355,115 @@ export class CallSession {
       replyTimeoutMs?: number;
       peerWaitMs?: number;
       /**
-       * The MCP request's abort signal. This is the exact stop condition: a host
-       * that times out a tool call sends notifications/cancelled and the SDK
-       * aborts the handler, so we learn the caller is gone instead of guessing
-       * its deadline. `waitMs` stays as the fallback for hosts that cancel
-       * nothing.
+       * The MCP request's abort signal. When it fires during pairing, the
+       * question is NOT sent after a later join. When it fires after the send,
+       * the ask is detached so a late reply lands in the inbound queue for
+       * sb_listen.
        */
       signal?: AbortSignal;
     } = {},
-  ): Promise<Message | null> {
+  ): Promise<AskOutcome> {
     const { waitMs, replyTimeoutMs, peerWaitMs, signal } = opts;
-    if (signal?.aborted) throw new Error('sb_ask was cancelled before the question was sent');
-    const { id, reply } = await this.#startAsk(question, replyTimeoutMs, peerWaitMs);
+    if (signal?.aborted) return { state: 'not-sent', reason: 'cancelled' };
+    this.#assertNotClosed();
+
+    // A single deadline promise armed BEFORE #waitForPeer so pairing counts
+    // against the caller's wait. Both waitMs and abort feed the same channel,
+    // AND the same deadline is exposed as an AbortSignal so the pairing waiter
+    // can cancel its own 10-minute timer instead of being left to expire.
     const expired = Symbol('expired');
+    let deadlineFired = false;
+    const deadlineAc = new AbortController();
+    let unwireDeadline: () => void = () => {};
     const deadline = new Promise<typeof expired>((resolve) => {
-      const t = setTimeout(() => resolve(expired), waitMs ?? this.#askWaitMs);
-      if (typeof t === 'object' && 'unref' in t) t.unref();
-      signal?.addEventListener('abort', () => resolve(expired), { once: true });
-      if (signal?.aborted) resolve(expired);
+      const settle = (): void => {
+        if (deadlineFired) return;
+        deadlineFired = true;
+        deadlineAc.abort();
+        resolve(expired);
+      };
+      const timer = setTimeout(settle, waitMs ?? this.#askWaitMs);
+      if (typeof timer === 'object' && 'unref' in timer) timer.unref();
+      const onAbort = (): void => settle();
+      signal?.addEventListener('abort', onAbort, { once: true });
+      unwireDeadline = () => {
+        clearTimeout(timer);
+        signal?.removeEventListener('abort', onAbort);
+      };
     });
-    // Settle the reply into a value either way so Promise.race cannot reject
-    // before we have decided which side won.
-    const settled = reply.then(
-      (m) => ({ ok: true as const, m }),
-      (e: unknown) => ({ ok: false as const, e }),
-    );
-    const winner = await Promise.race([settled, deadline]);
-    if (winner === expired) {
-      // Only give up if the ask is still outstanding. If it is already gone the
-      // reply landed in the same tick as the deadline; await it rather than
-      // discarding a message we have in hand.
-      if (this.#detachAsk(id)) return null;
-      return reply;
+    // Silence unhandled-rejection for the losing branch of every race below.
+    const swallow = <T>(p: Promise<T>): Promise<T> => {
+      p.catch(() => {});
+      return p;
+    };
+
+    try {
+      // Phase 1: pairing. If the deadline fires first, the question is not built,
+      // #startAsk is not called, nothing reaches the wire. The pairing waiter
+      // receives deadlineAc.signal so its own timer is dropped when we give up.
+      if (!this.peer) {
+        const pair = swallow(
+          this.#waitForPeer(peerWaitMs ?? DEFAULT_PEER_WAIT_MS, deadlineAc.signal),
+        );
+        const raced = await Promise.race([pair.then(() => 'paired' as const), deadline]);
+        if (raced === expired) {
+          return { state: 'not-sent', reason: signal?.aborted ? 'cancelled' : 'timeout' };
+        }
+      }
+      this.#assertOpen();
+
+      // Phase 2: send + reply wait. Same deadline continues to run.
+      const prepared = this.#prepareAsk(question, replyTimeoutMs);
+      const { id, msg, reply } = prepared;
+      try {
+        await this.#client.send(this.callId, msg);
+      } catch (err) {
+        this.#detachAsk(id);
+        swallow(reply);
+        throw err;
+      }
+
+      const settled = swallow(reply).then(
+        (m) => ({ ok: true as const, m }),
+        (e: unknown) => ({ ok: false as const, e }),
+      );
+      const winner = await Promise.race([settled, deadline]);
+      if (winner === expired) {
+        // Detach so a late reply falls through to the inbound queue for sb_listen.
+        // If the reply landed in the same tick, don't discard a message in hand.
+        if (this.#detachAsk(id)) return { state: 'sent', queryId: id };
+        return { state: 'answered', reply: await reply };
+      }
+      if (winner.ok) return { state: 'answered', reply: winner.m };
+      throw winner.e;
+    } finally {
+      // Every outcome — answered, sent, not-sent, thrown — clears the deadline
+      // timer and detaches the abort listener. Long-running processes with many
+      // fast asks would otherwise accumulate Timeout objects and listeners.
+      unwireDeadline();
     }
-    if (winner.ok) return winner.m;
-    throw winner.e;
+  }
+
+  /**
+   * Build the query, register the pending reply, but DO NOT send. Lets
+   * `askBounded` keep pairing and sending under the same deadline without
+   * duplicating book-keeping.
+   */
+  #prepareAsk(
+    question: string,
+    replyTimeoutMs?: number,
+  ): { id: string; msg: Message; reply: Promise<Message> } {
+    const id = newMessageId();
+    const msg = this.#build(id, 'query', question, null);
+    const reply = new Promise<Message>((resolve, reject) => {
+      const timer = setTimeout(() => {
+        this.#awaiting.delete(id);
+        reject(new Error(`timed out waiting for peer reply to ${id}`));
+      }, replyTimeoutMs ?? this.#askTimeoutMs);
+      if (typeof timer === 'object' && 'unref' in timer) timer.unref();
+      this.#awaiting.set(id, { resolve, reject, timer });
+    });
+    return { id, msg, reply };
   }
 
   /** Put a query on the wire and register its pending reply. */
@@ -377,7 +481,7 @@ export class CallSession {
     }
     this.#assertOpen();
     const id = newMessageId();
-    const query = this.#build(id, 'query', question, null);
+    const q = this.#build(id, 'query', question, null);
 
     const reply = new Promise<Message>((resolve, reject) => {
       const timer = setTimeout(() => {
@@ -390,7 +494,7 @@ export class CallSession {
     });
 
     try {
-      await this.#client.send(this.callId, query);
+      await this.#client.send(this.callId, q);
     } catch (err) {
       this.#detachAsk(id);
       // Nothing is awaiting `reply` yet, so its rejection would be unhandled.
@@ -418,34 +522,61 @@ export class CallSession {
    * removing it from the queue. Resolves immediately if one is buffered,
    * otherwise parks until one arrives or the call closes.
    * Used by `sb_listen`. `null` means "no inbound and the call is closed".
+   *
+   * `signal` is the MCP request's AbortSignal. When it fires, the parked
+   * listener is DETACHED (not fed a message) so the next `ingest` queues to
+   * `#inbound` rather than handing the message to a promise nobody reads.
+   * The abort listener and the setTimeout are unwired on every outcome so a
+   * long-running host does not accumulate handles.
    */
-  nextInbound(timeoutMs?: number): Promise<Message | null> {
+  nextInbound(timeoutMs?: number, signal?: AbortSignal): Promise<Message | null> {
+    // Aborted-at-entry MUST NOT consume buffered data. A caller that cancels
+    // this call still has the option to sb_listen again and pick up whatever
+    // was in the queue; shifting first would silently drop it.
+    if (signal?.aborted) return Promise.resolve(null);
     const buffered = this.#inbound.shift();
     if (buffered) return Promise.resolve(buffered);
     if (this.#closed) return Promise.resolve(null);
 
     return new Promise<Message | null>((resolve) => {
       let settled = false;
-      const done = (m: Message | null) => {
+      const done = (m: Message | null): void => {
         if (settled) return;
         settled = true;
         if (this.#waitingListener === deliver) this.#waitingListener = null;
         clearTimeout(timer);
+        signal?.removeEventListener('abort', onAbort);
         resolve(m);
       };
-      const deliver = (m: Message) => {
+      const deliver = (m: Message): void => {
         // A hangup marker means the call closed while we were parked.
         if (m.type === 'hangup') done(null);
         else done(m);
       };
-      // Only one parked listener at a time; replace any prior parked one.
+      const onAbort = (): void => done(null);
+      // Deterministic policy for concurrent listens: settle the OLDER waiter
+      // with null (its caller has been superseded) instead of stranding its
+      // promise and timer. Before this, replacing #waitingListener left the
+      // previous promise pending forever with its timer still armed.
+      const prior = this.#waitingListener;
       this.#waitingListener = deliver;
+      if (prior) prior(this.#supersededMarker());
       const timer = setTimeout(
         () => done(null),
         timeoutMs ?? DEFAULT_ASK_TIMEOUT_MS,
       );
       if (typeof timer === 'object' && 'unref' in timer) timer.unref();
+      signal?.addEventListener('abort', onAbort, { once: true });
     });
+  }
+
+  /**
+   * A synthetic marker used ONLY to settle a superseded `nextInbound` waiter.
+   * Reuses the hangup-shaped path so the receiving `done` maps it to null
+   * without touching call state.
+   */
+  #supersededMarker(): Message {
+    return this.#hangupMarker('sb_listen superseded by a later listen on the same call');
   }
 
   /** Send a `response` to a specific inbound query. Used by `sb_answer`. */
@@ -466,7 +597,18 @@ export class CallSession {
    */
   async resolve(resolution: string | Resolution): Promise<CallReport | null> {
     this.#assertOpen();
-    await this.#client.resolve(this.callId, resolution);
+    try {
+      await this.#client.resolve(this.callId, resolution);
+    } catch (err) {
+      // Never leave a call open after a failed resolve. Persist an honest
+      // non-resolved report so downstream tooling sees the outcome instead of
+      // reading a dangling session. The error still propagates to the caller
+      // so the model can report the failure to its human.
+      this.markClosed(
+        `resolve failed: ${err instanceof Error ? err.message : String(err)}`,
+      );
+      throw err;
+    }
     this.markClosed('resolved');
     return this.#lastReport;
   }
@@ -655,13 +797,23 @@ export class SessionStore {
         const session = this.#sessions.get(msg.callId);
         if (session) session.ingest(msg);
       });
-      client.onHangup((reason) => {
-        // The wire-level hangup frame doesn't carry a callId in onHangup's
-        // signature; close every session ON THIS CLIENT defensively. In
-        // practice a relay hangup targets a specific call, but failing safe
-        // is correct — and it must not leak across relays.
-        for (const s of this.#sessions.values()) {
-          if (s.client === client) s.markClosed(reason);
+      client.onHangup((reason, callId?: string) => {
+        // Per-call isolation. A relay-delivered hangup frame carries the
+        // callId it targets (client passes it as the second arg), so we close
+        // only THAT session and leave other calls on this same client alone.
+        // A socket-close event passes no callId; that IS whole-client, so we
+        // close every session that shares this client.
+        //
+        // Before this filter, ending one call closed every unrelated call on
+        // the same connection (a common shape once one process holds several
+        // Magpie calls at once).
+        if (callId !== undefined) {
+          const session = this.#sessions.get(callId);
+          if (session && session.client === client) session.markClosed(reason);
+        } else {
+          for (const s of this.#sessions.values()) {
+            if (s.client === client) s.markClosed(reason);
+          }
         }
         // If the underlying socket dropped, evict this client from the cache
         // so the next start/join reconnects instead of reusing a dead socket.
