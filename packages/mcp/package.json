@@ -25,5 +25,8 @@
     "@magpie/client": "*",
     "@magpie/protocol": "*",
     "zod": "^3.25.0"
+  },
+  "devDependencies": {
+    "@magpie/relay": "*"
   }
 }
