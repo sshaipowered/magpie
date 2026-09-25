@@ -533,7 +533,7 @@ describe('CallSession.askBounded does not lose a reply the caller stopped waitin
     const pending = session.askBounded('q', { signal: ac.signal });
     await Promise.resolve();
     ac.abort();
-    expect(await pending).toBeNull();
+    expect((await pending).status).toBe('pending-reply');
 
     // The peer answers after the caller gave up. Before this fix `ingest` matched
     // it to a promise nobody was reading and dropped it.
@@ -548,7 +548,7 @@ describe('CallSession.askBounded does not lose a reply the caller stopped waitin
     const { client, sent } = fakeClient();
     const session = newSession(client);
 
-    expect(await session.askBounded('q', { waitMs: 5 })).toBeNull();
+    expect((await session.askBounded('q', { waitMs: 5 })).status).toBe('pending-reply');
     const query = sent.at(-1)!;
     session.ingest({ ...query, id: 'msg-lateReply01', type: 'response', inReplyTo: query.id, content: 'also late' });
     expect((await session.nextInbound(1000))?.content).toBe('also late');
@@ -562,7 +562,8 @@ describe('CallSession.askBounded does not lose a reply the caller stopped waitin
     await Promise.resolve();
     const query = sent.at(-1)!;
     session.ingest({ ...query, id: 'msg-promptReply0', type: 'response', inReplyTo: query.id, content: 'on time' });
-    expect((await pending)?.content).toBe('on time');
+    const done = await pending;
+    expect(done.status === 'replied' && done.reply.content).toBe('on time');
     expect(await session.nextInbound(20)).toBeNull();
   });
 
@@ -572,5 +573,36 @@ describe('CallSession.askBounded does not lose a reply the caller stopped waitin
     const before = sent.length;
     await expect(session.askBounded('q', { signal: AbortSignal.abort() })).rejects.toThrow(/cancelled/);
     expect(sent.length).toBe(before);
+  });
+});
+
+describe('CallSession bounds the whole ask, and a cancelled listen keeps the message', () => {
+  it('reports pending-peer and sends NOTHING when nobody joins in the bound', async () => {
+    const { client, sent } = fakeClient();
+    const session = new CallSession({
+      client, callId: CALL_ID, self: SELF, peer: null, topic: 't', code: 'X',
+    });
+    const before = sent.length;
+    const out = await session.askBounded('q', { waitMs: 10 });
+    expect(out.status).toBe('pending-peer');
+    expect(sent.length).toBe(before);
+  });
+
+  it('un-parks a cancelled sb_listen so the next query is queued, not swallowed', async () => {
+    const { client } = fakeClient();
+    const session = newSession(client);
+    const ac = new AbortController();
+
+    const listen = session.nextInbound(60_000, ac.signal);
+    await Promise.resolve();
+    ac.abort();
+    expect(await listen).toBeNull();
+
+    session.ingest({
+      v: 1, id: 'msg-afterCancel0', callId: CALL_ID, from: PEER, to: SELF,
+      type: 'query', ts: new Date().toISOString(), turn: 0, inReplyTo: null,
+      content: 'arrived after the cancel',
+    } as Message);
+    expect((await session.nextInbound(1000))?.content).toBe('arrived after the cancel');
   });
 });

@@ -195,22 +195,32 @@ export function registerMagpieTools(server: McpServer, store: SessionStore): voi
         // then DETACHED rather than left waiting on a promise nobody reads, so a
         // reply arriving afterwards lands in the inbound queue for sb_listen
         // instead of being consumed and lost.
-        const reply = await session.askBounded(question, {
+        const outcome = await session.askBounded(question, {
           ...(extra?.signal ? { signal: extra.signal } : {}),
         });
-        if (!reply) {
+        if (outcome.status === 'pending-peer') {
           return ok(
             [
-              `Question sent on ${callId}, no reply yet.`,
+              `Nobody has joined ${callId} yet, so the question was NOT sent.`,
               ``,
-              `The peer is still working. Call sb_listen(callId=${callId}) to pick up`,
-              `their answer when it arrives; it is queued, not lost. Do NOT resend the`,
-              `question — the peer already has it.`,
+              `Show your human the invite again, then call sb_ask with the same`,
+              `question. Nothing is queued: the peer has not seen it.`,
+            ].join('\n'),
+          );
+        }
+        if (outcome.status === 'pending-reply') {
+          return ok(
+            [
+              `Question sent on ${callId} (message ${outcome.id}), no reply yet.`,
+              ``,
+              `The peer already has it — do NOT resend. Call`,
+              `sb_listen(callId=${callId}) to pick up their answer when it arrives;`,
+              `it is queued, not lost.`,
             ].join('\n'),
           );
         }
         // The peer's answer is untrusted: fence it before the model sees it.
-        return ok(renderInbound(reply));
+        return ok(renderInbound(outcome.reply));
       }),
   );
 
@@ -238,10 +248,12 @@ export function registerMagpieTools(server: McpServer, store: SessionStore): voi
           .describe('How long to wait for an inbound query before returning a "nothing yet" notice.'),
       },
     },
-    async ({ callId, timeoutMs }) =>
+    async ({ callId, timeoutMs }, extra) =>
       guarded(async () => {
         const session = store.require(callId);
-        const msg = await session.nextInbound(timeoutMs);
+        // The signal matters for the same reason it does in sb_ask: a cancelled
+        // listen that stays parked swallows the next inbound message.
+        const msg = await session.nextInbound(timeoutMs, extra?.signal);
         if (!msg) {
           const info = session.info();
           return ok(
@@ -265,6 +277,21 @@ export function registerMagpieTools(server: McpServer, store: SessionStore): voi
               `Report this conclusion to your human. The full report is in this result's structured content and under ~/.magpie/calls/.`,
             ].join('\n'),
             asStructured(report),
+          );
+        }
+        // A `response` is the peer ANSWERING an earlier sb_ask of ours, recovered
+        // from the queue. Telling the model to answer it, as this once did, turns
+        // their answer into a question and invites an endless echo.
+        if (msg.type === 'response') {
+          return ok(
+            [
+              `The peer ANSWERED your earlier question${msg.inReplyTo ? ` (${msg.inReplyTo})` : ''} on ${callId}.`,
+              `This is their reply, not a new question — do NOT call sb_answer for it.`,
+              ``,
+              renderInbound(msg),
+              ``,
+              `Use it, then continue with sb_ask or conclude with sb_resolve.`,
+            ].join('\n'),
           );
         }
         // Surface the message id so the model can pass it to sb_answer as inReplyTo.

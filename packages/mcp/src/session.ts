@@ -77,6 +77,18 @@ const DEFAULT_ASK_TIMEOUT_MS = 15 * 60 * 1000;
 const DEFAULT_ASK_WAIT_MS = 4 * 60 * 1000;
 
 /**
+ * What one bounded sb_ask call ended as. The two pending cases are NOT the same
+ * thing and the model must be told which it got: after `pending-reply` the peer
+ * holds the question and the answer will arrive in the inbound queue, so
+ * resending would ask twice; after `pending-peer` nothing was sent at all, so
+ * the question still has to be asked once someone joins.
+ */
+export type AskOutcome =
+  | { status: 'replied'; reply: Message }
+  | { status: 'pending-reply'; id: string }
+  | { status: 'pending-peer' };
+
+/**
  * How long `sb_ask` will wait for the peer to JOIN before sending, when asked
  * on a call nobody has joined yet. Matches the pairing-code TTL horizon: the
  * human shares the invite out-of-band and the peer joins whenever they can.
@@ -192,7 +204,7 @@ export class CallSession {
    * Resolve once the peer has joined; reject if the call closes first or the
    * wait exceeds `timeoutMs`. Resolves immediately if the peer is already here.
    */
-  #waitForPeer(timeoutMs: number): Promise<void> {
+  #waitForPeer(timeoutMs: number, signal?: AbortSignal): Promise<void> {
     if (this.peer) return Promise.resolve();
     if (this.#closed) {
       return Promise.reject(new Error(`call ${this.callId} closed: ${this.#closedReason}`));
@@ -320,7 +332,12 @@ export class CallSession {
   async askBounded(
     question: string,
     opts: {
-      /** Upper bound on this call's wait. Defaults to DEFAULT_ASK_WAIT_MS. */
+      /**
+       * Upper bound on this ENTIRE call, pairing wait included. It has to cover
+       * the whole call to be a safety net for hosts that cancel nothing: the
+       * peer wait alone is 10 min by design, so bounding only the reply left
+       * sb_ask able to block far past any host deadline.
+       */
       waitMs?: number;
       replyTimeoutMs?: number;
       peerWaitMs?: number;
@@ -333,17 +350,35 @@ export class CallSession {
        */
       signal?: AbortSignal;
     } = {},
-  ): Promise<Message | null> {
+  ): Promise<AskOutcome> {
     const { waitMs, replyTimeoutMs, peerWaitMs, signal } = opts;
     if (signal?.aborted) throw new Error('sb_ask was cancelled before the question was sent');
-    const { id, reply } = await this.#startAsk(question, replyTimeoutMs, peerWaitMs);
+
     const expired = Symbol('expired');
+    // One deadline for the whole call, started before the pairing wait.
     const deadline = new Promise<typeof expired>((resolve) => {
       const t = setTimeout(() => resolve(expired), waitMs ?? this.#askWaitMs);
       if (typeof t === 'object' && 'unref' in t) t.unref();
-      signal?.addEventListener('abort', () => resolve(expired), { once: true });
-      if (signal?.aborted) resolve(expired);
+      if (signal) {
+        if (signal.aborted) resolve(expired);
+        else signal.addEventListener('abort', () => resolve(expired), { once: true });
+      }
     });
+
+    // Pairing wait, bounded by the same deadline. Giving up here must send
+    // NOTHING: a query put on the wire for a caller that has gone away would
+    // consume a relay turn and reach a peer nobody is going to read the answer
+    // for. There is correspondingly nothing for sb_listen to recover.
+    this.#assertNotClosed();
+    if (!this.peer) {
+      const joined = await Promise.race([
+        this.#waitForPeer(peerWaitMs ?? DEFAULT_PEER_WAIT_MS).then(() => 'joined' as const),
+        deadline,
+      ]);
+      if (joined === expired) return { status: 'pending-peer' };
+    }
+
+    const { id, reply } = await this.#startAsk(question, replyTimeoutMs);
     // Settle the reply into a value either way so Promise.race cannot reject
     // before we have decided which side won.
     const settled = reply.then(
@@ -355,10 +390,10 @@ export class CallSession {
       // Only give up if the ask is still outstanding. If it is already gone the
       // reply landed in the same tick as the deadline; await it rather than
       // discarding a message we have in hand.
-      if (this.#detachAsk(id)) return null;
-      return reply;
+      if (this.#detachAsk(id)) return { status: 'pending-reply', id };
+      return { status: 'replied', reply: await reply };
     }
-    if (winner.ok) return winner.m;
+    if (winner.ok) return { status: 'replied', reply: winner.m };
     throw winner.e;
   }
 
@@ -372,6 +407,7 @@ export class CallSession {
     // Ask-before-join: if nobody has joined yet, block until the peer arrives
     // rather than erroring. When a peer is already present (the common case)
     // this is skipped so the query is put on the wire synchronously.
+    // askBounded does its own bounded wait and calls this with the peer present.
     if (!this.peer) {
       await this.#waitForPeer(peerWaitMs ?? DEFAULT_PEER_WAIT_MS);
     }
@@ -419,7 +455,7 @@ export class CallSession {
    * otherwise parks until one arrives or the call closes.
    * Used by `sb_listen`. `null` means "no inbound and the call is closed".
    */
-  nextInbound(timeoutMs?: number): Promise<Message | null> {
+  nextInbound(timeoutMs?: number, signal?: AbortSignal): Promise<Message | null> {
     const buffered = this.#inbound.shift();
     if (buffered) return Promise.resolve(buffered);
     if (this.#closed) return Promise.resolve(null);
@@ -445,6 +481,13 @@ export class CallSession {
         timeoutMs ?? DEFAULT_ASK_TIMEOUT_MS,
       );
       if (typeof timer === 'object' && 'unref' in timer) timer.unref();
+      // A host that gives up on the tool call leaves this listener parked, and
+      // the next inbound query is then handed to a callback nobody reads —
+      // the same loss sb_ask had. Un-park on cancellation so the query queues.
+      if (signal) {
+        if (signal.aborted) done(null);
+        else signal.addEventListener('abort', () => done(null), { once: true });
+      }
     });
   }
 
