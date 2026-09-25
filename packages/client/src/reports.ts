@@ -20,7 +20,7 @@ export function callsDir(): string {
 }
 
 function reportPath(callId: string): string {
-  CallId.parse(callId);
+  if (!CallId.safeParse(callId).success) throw new Error('refusing a report path for a malformed callId');
   const dir = resolve(callsDir());
   const path = resolve(dir, `${callId}.json`);
   if (dirname(path) !== dir) throw new Error('report path is outside the calls directory');

@@ -250,12 +250,12 @@ let fakeCallSeq = 0;
 function fakeRelayClient(url: string): {
   client: MagpieClient;
   joins: { from: string; code: string }[];
-  hangupCbs: ((reason: string, callId?: string) => void)[];
+  hangupCbs: ((reason: string, callId?: string | null) => void)[];
   /** Simulate the socket dropping (relay closed us / network death). */
   drop: () => void;
 } {
   const joins: { from: string; code: string }[] = [];
-  const hangupCbs: ((reason: string, callId?: string) => void)[] = [];
+  const hangupCbs: ((reason: string, callId?: string | null) => void)[] = [];
   let connected = true;
   const client = {
     relayUrlForTest: url,
@@ -263,7 +263,7 @@ function fakeRelayClient(url: string): {
       return connected;
     },
     onMessage: vi.fn(),
-    onHangup: vi.fn((cb: (reason: string, callId?: string) => void) => hangupCbs.push(cb)),
+    onHangup: vi.fn((cb: (reason: string, callId?: string | null) => void) => hangupCbs.push(cb)),
     onPeerJoined: vi.fn(),
     // markClosed builds a report on every close; a relay-shaped stub has no
     // transcript, so it reports nothing and nothing is written to disk.
@@ -415,14 +415,14 @@ describe('SessionStore routes joins by invite-carried relay URL', () => {
     expect(connected.get(url)!.client.isConnected).toBe(true);
   });
 
-  it('a callId-less hangup (socket drop) closes every session on that client', async () => {
+  it.each([undefined, null])('a socket drop with callId=%s closes every session on that client', async (callId) => {
     const { store, connected } = fakeStore('ws://default:8787');
     const url = 'ws://relay-d:9000';
     const a = await store.join(`K7F3-9M2P-XQ4R@${url}`);
     const b = await store.join(`K7F3-9M2P-XQ4R@${url}`);
 
     connected.get(url)!.drop();
-    for (const cb of connected.get(url)!.hangupCbs) cb('connection closed');
+    for (const cb of connected.get(url)!.hangupCbs) cb('connection closed', callId);
     expect(a.closed).toBe(true);
     expect(b.closed).toBe(true);
   });

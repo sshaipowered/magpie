@@ -84,9 +84,9 @@ degrade to "no structure".
 ## 4. Turn cap & termination
 
 The relay cannot see message types, so it counts every sealed send as a turn.
-A client that announces identity therefore adds `IDENTITY_TURN_BUDGET` (2) to
+A client therefore adds `RESERVED_TURN_BUDGET` (4: two hellos, a resolution, and its receipt) to
 the cap it requests in `open`, so the caller's `maxTurns` still means "messages
-between agents". A `maxTurns: 1` call still allows exactly one real message.
+between agents". Unused control slots may be consumed by ordinary messages because the relay cannot distinguish encrypted message types. The absolute sealed-frame ceiling remains 50.
 
 - A call carries `turn` and `maxTurns` (`DEFAULT_MAX_TURNS = 12`, hard ceiling `ABSOLUTE_MAX_TURNS = 50`).
 - The relay increments `turn` per delivered query and refuses delivery past `maxTurns`, emitting a `hangup`.

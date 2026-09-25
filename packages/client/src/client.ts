@@ -13,7 +13,7 @@ import {
   decodeResolution,
   encodeHello,
   encodeResolution,
-  IDENTITY_TURN_BUDGET,
+  RESERVED_TURN_BUDGET,
 } from '@magpie/protocol';
 import type {
   Extension,
@@ -35,10 +35,9 @@ import type {
 import { parseRelayFrame } from './wire.js';
 
 const RESOLUTION_RECEIPT = 'magpie:resolution-received/1';
-const TERMINATION_TURN_BUDGET = 2; // One resolution and its sealed receipt.
 
 type MessageCb = (msg: Message) => void;
-type HangupCb = (reason: string, callId?: string) => void;
+type HangupCb = (reason: string, callId?: string | null) => void;
 type PeerJoinedCb = (callId: string, peer: Extension) => void;
 type ResolvedCb = (callId: string, summary: string, resolution: Resolution) => void;
 
@@ -152,7 +151,7 @@ export class MagpieClient {
     const requested = opts.maxTurns ?? DEFAULT_MAX_TURNS;
     // Reserve two hellos, the resolution, and its receipt. The relay's hard
     // absolute limit still wins; hitting it must fail instead of claiming delivery.
-    const maxTurns = Math.max(1, Math.min(requested + IDENTITY_TURN_BUDGET + TERMINATION_TURN_BUDGET, ABSOLUTE_MAX_TURNS));
+    const maxTurns = Math.max(1, Math.min(requested + RESERVED_TURN_BUDGET, ABSOLUTE_MAX_TURNS));
 
     const send: OpenFrame = {
       t: 'open',
@@ -627,7 +626,7 @@ export class MagpieClient {
     // and invalidate any memoized reference to this now-dead client.
     for (const cb of this.#hangupCbs) {
       try {
-        cb(reason);
+        cb(reason, null);
       } catch {
         // a listener must not break teardown
       }

@@ -797,7 +797,7 @@ export class SessionStore {
         const session = this.#sessions.get(msg.callId);
         if (session) session.ingest(msg);
       });
-      client.onHangup((reason, callId?: string) => {
+      client.onHangup((reason, callId) => {
         // Per-call isolation. A relay-delivered hangup frame carries the
         // callId it targets (client passes it as the second arg), so we close
         // only THAT session and leave other calls on this same client alone.
@@ -807,7 +807,7 @@ export class SessionStore {
         // Before this filter, ending one call closed every unrelated call on
         // the same connection (a common shape once one process holds several
         // Magpie calls at once).
-        if (callId !== undefined) {
+        if (callId != null) {
           const session = this.#sessions.get(callId);
           if (session && session.client === client) session.markClosed(reason);
         } else {
