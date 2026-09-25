@@ -163,3 +163,20 @@ describe('relay open/join/deliver', () => {
     expect(await hangupP).toMatchObject({ t: 'hangup', callId, reason: 'done' });
   });
 });
+
+describe('pending invitation cancellation', () => {
+  it('rejects another socket, confirms owner cancellation, and prevents joining', async () => {
+    relay = await startRelay(0);
+    const owner = await connect(relay.port);
+    const stranger = await connect(relay.port);
+    const rid = rendezvousId(generatePairingCode());
+    send(owner, { t: 'open', rendezvousId: rid, from: FROM_A, topic: 'pending', maxTurns: 4 });
+    const { callId } = await nextFrame(owner, 'opened') as { callId: string };
+    send(stranger, { t: 'hangup', callId });
+    expect(await nextFrame(stranger)).toMatchObject({ t: 'error', code: 'NOT_PARTICIPANT' });
+    send(owner, { t: 'hangup', callId });
+    expect(await nextFrame(owner)).toMatchObject({ t: 'hangup', callId });
+    send(stranger, { t: 'join', rendezvousId: rid, from: FROM_B });
+    expect(await nextFrame(stranger)).toMatchObject({ t: 'error', code: 'UNKNOWN_RENDEZVOUS' });
+  });
+});

@@ -209,6 +209,16 @@ impl CallRegistry {
         Ok(())
     }
 
+    /// Cancel one invitation, after checking its owner.
+    pub fn cancel_pending(&mut self, call_id: &str, endpoint: Endpoint) -> Result<bool, RegError> {
+        let entry = self.pending.iter().find(|(_, p)| p.call_id == call_id);
+        let Some((rid, pending)) = entry else { return Ok(false); };
+        if pending.opener != endpoint { return Err(RegError::NotParticipant); }
+        let rid = rid.clone();
+        self.pending.remove(&rid);
+        Ok(true)
+    }
+
     /// Close + remove a call. Returns the removed call (for routing a hangup).
     pub fn close(&mut self, call_id: &str) -> Option<LiveCall> {
         self.calls.remove(call_id).map(|mut c| {
@@ -286,6 +296,19 @@ mod tests {
 
     fn reg() -> CallRegistry {
         CallRegistry::new(PAIRING_TTL, CALL_IDLE_TTL)
+    }
+
+    #[test]
+    fn cancel_pending_checks_owner_and_preserves_other_invites() {
+        let mut r = reg();
+        let cid = r.open("a".repeat(32), "@a/x".into(), "t".into(), 12, 1).unwrap();
+        r.open("b".repeat(32), "@a/x".into(), "other".into(), 12, 1).unwrap();
+        assert_eq!(r.cancel_pending(&cid, 2), Err(RegError::NotParticipant));
+        assert_eq!(r.pending_count(), 2);
+        assert_eq!(r.cancel_pending(&cid, 1), Ok(true));
+        assert_eq!(r.cancel_pending(&cid, 1), Ok(false));
+        assert_eq!(r.join("a".repeat(32), "@b/y".into(), 2).unwrap_err(), RegError::UnknownRendezvous);
+        assert!(r.join("b".repeat(32), "@b/y".into(), 2).is_ok());
     }
 
     #[test]

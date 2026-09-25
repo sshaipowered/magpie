@@ -179,6 +179,19 @@ export class CallRegistry<E> {
     this.touch(call);
   }
 
+  /** Cancel only the invitation owned by this endpoint. */
+  cancelPending(callId: string, endpoint: E): boolean {
+    for (const [rid, pending] of this.#pending) {
+      if (pending.callId !== callId) continue;
+      if (pending.opener !== endpoint) {
+        throw new RegistryError('NOT_PARTICIPANT', 'sender does not own this invitation');
+      }
+      this.#pending.delete(rid);
+      return true;
+    }
+    return false;
+  }
+
   /** Close + remove a call. Returns the removed call (for routing a hangup). */
   close(callId: string): LiveCall<E> | undefined {
     const call = this.#calls.get(callId);

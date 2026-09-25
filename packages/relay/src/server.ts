@@ -177,16 +177,21 @@ export class RelayServer {
 
   #handleHangup(ws: WebSocket, frame: Extract<ClientFrame, { t: 'hangup' }>): void {
     const call = this.#registry.getCall(frame.callId);
-    if (!call) throw new RegistryError('UNKNOWN_CALL', 'no such call');
-    const idx = this.#registry.endpointIndex(call, ws);
-    if (idx === -1) throw new RegistryError('NOT_PARTICIPANT', 'sender is not a participant in this call');
-
-    const peer = this.#registry.peerEndpoint(call, ws);
-    const reason = frame.reason ?? 'peer hung up';
-    this.#registry.close(frame.callId);
-    if (peer && peer.readyState === WebSocket.OPEN) {
-      this.#send(peer, { t: 'hangup', callId: frame.callId, reason });
+    if (!call) {
+      if (!this.#registry.cancelPending(frame.callId, ws)) {
+        throw new RegistryError('UNKNOWN_CALL', 'no such call');
+      }
+    } else {
+      const idx = this.#registry.endpointIndex(call, ws);
+      if (idx === -1) throw new RegistryError('NOT_PARTICIPANT', 'sender is not a participant in this call');
+      const peer = this.#registry.peerEndpoint(call, ws);
+      this.#registry.close(frame.callId);
+      if (peer && peer.readyState === WebSocket.OPEN) {
+        this.#send(peer, { t: 'hangup', callId: frame.callId, reason: frame.reason ?? 'peer hung up' });
+      }
     }
+    // Existing frame shape acknowledges actual removal, including pending invites.
+    this.#send(ws, { t: 'hangup', callId: frame.callId, reason: 'hangup confirmed' });
   }
 
   #onClose(ws: WebSocket): void {

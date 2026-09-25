@@ -329,23 +329,28 @@ fn handle_frame(state: &Shared, conn: Endpoint, frame: ClientFrame) {
                 st.send(conn, ServerFrame::error("BAD_FRAME", "invalid hangup frame"));
                 return;
             }
-            let endpoints = match st.reg.get_call(&call_id) {
-                Some(c) => c.endpoints,
-                None => {
-                    st.send(conn, ServerFrame::error("UNKNOWN_CALL", "no such call"));
+            if let Some(call) = st.reg.get_call(&call_id) {
+                let endpoints = call.endpoints;
+                let Some(i) = endpoints.iter().position(|&e| e == conn) else {
+                    st.send(conn, ServerFrame::error("NOT_PARTICIPANT", "sender is not a participant in this call"));
                     return;
+                };
+                let peer = endpoints[1 - i];
+                st.reg.close(&call_id);
+                if st.connected(peer) {
+                    st.send(peer, ServerFrame::Hangup { call_id: call_id.clone(), reason: reason.unwrap_or_else(|| "peer hung up".into()) });
                 }
-            };
-            let Some(i) = endpoints.iter().position(|&e| e == conn) else {
-                st.send(conn, ServerFrame::error("NOT_PARTICIPANT", "sender is not a participant in this call"));
-                return;
-            };
-            let peer = endpoints[1 - i];
-            let reason = reason.unwrap_or_else(|| "peer hung up".into());
-            st.reg.close(&call_id);
-            if st.connected(peer) {
-                st.send(peer, ServerFrame::Hangup { call_id, reason });
+            } else {
+                match st.reg.cancel_pending(&call_id, conn) {
+                    Ok(true) => {},
+                    result => {
+                        let err = result.err().unwrap_or(registry::RegError::UnknownCall);
+                        st.send(conn, ServerFrame::error(err.code(), err.message()));
+                        return;
+                    }
+                }
             }
+            st.send(conn, ServerFrame::Hangup { call_id, reason: "hangup confirmed".into() });
         }
     }
 }
