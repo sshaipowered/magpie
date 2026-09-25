@@ -277,13 +277,19 @@ describe('conformance/13 Rust relay interop (binary, via TS client)', () => {
     );
     await bob.waitForMessage(1);
 
-    // Turn 2: Bob answers — this consumes the last allowed turn.
+    // Turn 2: Bob answers; two sealed control slots remain.
     await bob.client.send(
       callId,
       makeMessage({ callId, from: BOB, to: ALICE, type: 'response', content: 'a1', turn: 1 }),
     );
     await alice.waitForMessage(1);
 
+    // The opaque relay cannot distinguish control traffic. Deliberately spend
+    // the two resolution/receipt slots to test its hard sealed-frame ceiling.
+    for (let n = 0; n < 2; n++) {
+      await alice.client.send(callId, makeMessage({ callId, from: ALICE, to: BOB, type: 'query', content: `consume control slot ${n}` }));
+      await bob.waitForMessage(n + 2);
+    }
     // The capping send: delivery is refused, the call is closed, both ends hung up.
     const aHang = alice.waitForHangup();
     const bHang = bob.waitForHangup();
@@ -296,7 +302,7 @@ describe('conformance/13 Rust relay interop (binary, via TS client)', () => {
     expect(rb).toMatch(/turn cap/);
 
     // The over-cap query was never delivered to Bob (cap precedes routing).
-    expect(bob.inbox).toHaveLength(1);
+    expect(bob.inbox).toHaveLength(3);
   });
 
   // Scenario 10 — a message fired the instant the peer joins must not be dropped.

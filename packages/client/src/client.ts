@@ -34,8 +34,11 @@ import type {
 } from './wire.js';
 import { parseRelayFrame } from './wire.js';
 
+const RESOLUTION_RECEIPT = 'magpie:resolution-received/1';
+const TERMINATION_TURN_BUDGET = 2; // One resolution and its sealed receipt.
+
 type MessageCb = (msg: Message) => void;
-type HangupCb = (reason: string) => void;
+type HangupCb = (reason: string, callId?: string) => void;
 type PeerJoinedCb = (callId: string, peer: Extension) => void;
 type ResolvedCb = (callId: string, summary: string, resolution: Resolution) => void;
 
@@ -98,6 +101,8 @@ export class MagpieClient {
    */
   readonly #pendingChannel: PairingChannel[] = [];
 
+  readonly #pendingHangup = new Map<string, Pending<void>>();
+  readonly #pendingResolution = new Map<string, Pending<void> & { messageId: string }>();
   #closed = false;
 
   /** This side's announceable identity, or null when the caller opted out. */
@@ -145,12 +150,9 @@ export class MagpieClient {
 
     // Clamp client-side too; the relay re-clamps, but never send nonsense.
     const requested = opts.maxTurns ?? DEFAULT_MAX_TURNS;
-    // The relay counts every sealed send, hello frames included, so reserve
-    // their budget on top of what the caller asked for. Otherwise a caller's
-    // maxTurns=4 would quietly become two real messages. Unconditional: the
-    // opener always sends a hello (it carries the topic), and the opener
-    // cannot know whether the joiner will send one.
-    const maxTurns = Math.max(1, Math.min(requested + IDENTITY_TURN_BUDGET, ABSOLUTE_MAX_TURNS));
+    // Reserve two hellos, the resolution, and its receipt. The relay's hard
+    // absolute limit still wins; hitting it must fail instead of claiming delivery.
+    const maxTurns = Math.max(1, Math.min(requested + IDENTITY_TURN_BUDGET + TERMINATION_TURN_BUDGET, ABSOLUTE_MAX_TURNS));
 
     const send: OpenFrame = {
       t: 'open',
@@ -252,8 +254,6 @@ export class MagpieClient {
     if (!ctx) throw new Error(`no such call ${callId}`);
     if (!ctx.peer) throw new Error('cannot resolve before a peer has joined');
     const r: Resolution = typeof resolution === 'string' ? { summary: resolution } : resolution;
-    ctx.resolution = r;
-    ctx.summary = r.summary;
     const msg: Message = {
       v: PROTOCOL_VERSION,
       id: newMessageId(),
@@ -266,9 +266,21 @@ export class MagpieClient {
       inReplyTo: null,
       content: encodeResolution(r),
     };
-    this.#sendSealed(callId, msg);
-    // The transcript keeps the human-readable summary, never the envelope.
-    this.#record(callId, { ...msg, content: r.summary });
+    if (this.#pendingResolution.has(callId)) throw new Error('resolution already pending');
+    const receipt = this.#confirmation(this.#pendingResolution, callId, { messageId: msg.id });
+    try {
+      this.#sendSealed(callId, msg);
+      // Sending is not proof of delivery. Commit the summary only after receipt.
+      this.#record(callId, { ...msg, content: r.summary });
+      await receipt;
+      ctx.resolution = r;
+      ctx.summary = r.summary;
+    } catch (err) {
+      this.#pendingResolution.get(callId)?.reject(new Error('resolution not confirmed'));
+      // Best effort cleanup is bounded; it never converts failure into success.
+      if (this.#channels.has(callId)) await this.hangup(callId).catch(() => undefined);
+      throw err;
+    }
     await this.hangup(callId);
   }
 
@@ -369,8 +381,33 @@ export class MagpieClient {
 
   /** Tear down a single call and tell the relay. */
   async hangup(callId: string): Promise<void> {
-    this.#sendFrame({ t: 'hangup', callId });
-    this.#channels.delete(callId);
+    if (this.#pendingHangup.has(callId)) throw new Error('hangup already pending');
+    const confirmed = this.#confirmation(this.#pendingHangup, callId);
+    try {
+      this.#sendFrame({ t: 'hangup', callId });
+      await confirmed;
+    } catch (err) {
+      this.#pendingHangup.get(callId)?.reject(new Error('hangup not confirmed'));
+      throw err;
+    } finally {
+      this.#channels.delete(callId);
+    }
+  }
+
+  #confirmation<T extends Pending<void>>(
+    map: Map<string, T>, callId: string, extra: Partial<T> = {},
+  ): Promise<void> {
+    const promise = new Promise<void>((resolve, reject) => {
+      const finish = (error?: Error) => {
+        clearTimeout(timer);
+        map.delete(callId);
+        if (error) reject(error); else resolve();
+      };
+      const timer = setTimeout(() => finish(new Error('peer/relay receipt not confirmed within 3 seconds')), 3000);
+      map.set(callId, { ...extra, resolve: () => finish(), reject: finish } as T);
+    });
+    void promise.catch(() => undefined);
+    return promise;
   }
 
   /**
@@ -385,8 +422,7 @@ export class MagpieClient {
 
   /** Close the underlying WebSocket and drop all per-call state. */
   close(): void {
-    this.#closed = true;
-    this.#channels.clear();
+    this.#onClose('client closed');
     try {
       this.#ws.close();
     } catch {
@@ -475,7 +511,10 @@ export class MagpieClient {
       }
       case 'hangup': {
         this.#channels.delete(frame.callId);
-        for (const cb of this.#hangupCbs) cb(frame.reason);
+        this.#pendingResolution.get(frame.callId)?.reject(new Error('call closed before resolution receipt'));
+        const confirmation = this.#pendingHangup.get(frame.callId);
+        if (confirmation) confirmation.resolve();
+        else for (const cb of this.#hangupCbs) cb(frame.reason, frame.callId);
         return;
       }
       case 'error': {
@@ -502,6 +541,13 @@ export class MagpieClient {
       process.stderr.write(
         `[magpie] dropped undecryptable/invalid frame on ${callId}: ${String(err)}\n`,
       );
+      return;
+    }
+    const context = this.#ctx.get(callId);
+    if (msg.callId !== callId || !context || msg.from !== context.peer || msg.to !== context.from) return;
+    if (msg.type === 'system' && msg.content === RESOLUTION_RECEIPT) {
+      const pending = this.#pendingResolution.get(callId);
+      if (pending && msg.inReplyTo === pending.messageId) pending.resolve();
       return;
     }
     // Hello frames are bookkeeping: record who and what, then vanish. They
@@ -531,6 +577,12 @@ export class MagpieClient {
         ctx.summary = r.summary;
       }
       this.#record(callId, { ...msg, content: r.summary });
+      // Receipt is sealed and correlated to this exact resolution, not a hangup.
+      this.#sendSealed(callId, {
+        ...msg, id: newMessageId(), from: msg.to, to: msg.from,
+        type: 'system', inReplyTo: msg.id, content: RESOLUTION_RECEIPT,
+        ts: new Date().toISOString(),
+      });
       for (const cb of this.#resolvedCbs) cb(callId, r.summary, r);
       return;
     }
@@ -567,6 +619,8 @@ export class MagpieClient {
     for (const p of this.#pendingOpen.splice(0)) p.reject(err);
     for (const p of this.#pendingJoin.splice(0)) p.reject(err);
     this.#pendingChannel.splice(0);
+    for (const pending of this.#pendingHangup.values()) pending.reject(err);
+    for (const pending of this.#pendingResolution.values()) pending.reject(err);
     this.#channels.clear();
     // A socket drop ends every call on this client. Notify the hangup
     // listeners so a session layer can unblock parked sb_ask/sb_listen calls

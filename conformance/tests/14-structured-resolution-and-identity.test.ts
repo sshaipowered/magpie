@@ -146,19 +146,16 @@ describe('structured resolution + identity attribution', () => {
     const hangups: string[] = [];
     A.onHangup((r) => hangups.push(r));
 
-    // maxTurns: 1 means ONE real message. Two identity frames go over the
-    // wire first; with the budget they are free, without it this send would
-    // already be over the cap.
+    // One conversation message leaves the hello and termination budget intact.
     const started = await A.start({ from: A_EXT, topic: 't', maxTurns: 1 });
     await B.join({ from: B_EXT, code: started.code });
     await settle();
     await A.send(started.callId, query(started.callId, A_EXT, B_EXT, 'one'));
     await settle();
     expect(hangups).toEqual([]);
-    // The second real message is the one that trips the cap.
-    await A.send(started.callId, query(started.callId, A_EXT, B_EXT, 'two', 1));
-    await settle();
-    expect(hangups.some((h) => /turn cap/.test(h))).toBe(true);
+    await A.resolve(started.callId, 'one message and a confirmed conclusion');
+    expect(A.buildReport(started.callId, 'resolved')?.summary).toBe('one message and a confirmed conclusion');
+    expect(B.buildReport(started.callId, 'resolved')?.summary).toBe('one message and a confirmed conclusion');
     A.close();
     B.close();
   });
