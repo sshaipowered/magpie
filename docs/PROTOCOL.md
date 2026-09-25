@@ -84,7 +84,7 @@ degrade to "no structure".
 ## 4. Turn cap & termination
 
 The relay cannot see message types, so it counts every sealed send as a turn.
-A client that announces identity therefore adds `IDENTITY_TURN_BUDGET` (2) to
+A client therefore adds `RESERVED_TURN_BUDGET` (3: one hello per side plus the closing resolve) to
 the cap it requests in `open`, so the caller's `maxTurns` still means "messages
 between agents". A `maxTurns: 1` call still allows exactly one real message.
 

@@ -146,19 +146,53 @@ describe('structured resolution + identity attribution', () => {
     const hangups: string[] = [];
     A.onHangup((r) => hangups.push(r));
 
-    // maxTurns: 1 means ONE real message. Two identity frames go over the
-    // wire first; with the budget they are free, without it this send would
-    // already be over the cap.
+    // maxTurns: 1 means ONE real message plus the resolve that ends the call.
+    // Three sealed frames are reserved (a hello per side, one resolve), so the
+    // first message is free of them. A call that never resolves spends its
+    // resolve reservation on a message instead, which is why the cap trips on
+    // the THIRD send here and not the second: one message of slack is the price
+    // of never handing a resolver a cap breach.
     const started = await A.start({ from: A_EXT, topic: 't', maxTurns: 1 });
     await B.join({ from: B_EXT, code: started.code });
     await settle();
     await A.send(started.callId, query(started.callId, A_EXT, B_EXT, 'one'));
     await settle();
     expect(hangups).toEqual([]);
-    // The second real message is the one that trips the cap.
     await A.send(started.callId, query(started.callId, A_EXT, B_EXT, 'two', 1));
     await settle();
+    expect(hangups).toEqual([]);
+    await A.send(started.callId, query(started.callId, A_EXT, B_EXT, 'three', 2));
+    await settle();
     expect(hangups.some((h) => /turn cap/.test(h))).toBe(true);
+    A.close();
+    B.close();
+  });
+
+  it('a resolve at the caller\'s turn cap is delivered, not rejected as a cap breach', async () => {
+    relay = await startRelay(0, { host: '127.0.0.1' });
+    const url = `ws://127.0.0.1:${relay.port}`;
+    const A = await MagpieClient.connect(url, { identity: toRef(loadOrCreateIdentity(idDir())) });
+    const B = await MagpieClient.connect(url, { identity: toRef(loadOrCreateIdentity(idDir())) });
+    const bResolved: string[] = [];
+    B.onResolved((_c, s2) => bResolved.push(s2));
+
+    // maxTurns: 2 means two messages between the agents. The resolve frame is a
+    // third sealed send on top of the two hellos, so the reserved budget has to
+    // cover it: before this it tripped the cap and A reported `resolved` while B
+    // reported `turn-cap` with a null summary for the same call.
+    const started = await A.start({ from: A_EXT, topic: 'cap', maxTurns: 2 });
+    const joined = await B.join({ from: B_EXT, code: started.code });
+    await settle();
+    await A.send(started.callId, query(started.callId, A_EXT, B_EXT, 'q'));
+    await settle();
+    await B.send(joined.callId, { ...query(joined.callId, B_EXT, A_EXT, 'a', 1), type: 'response' });
+    await settle();
+    await A.resolve(started.callId, 'settled at the cap');
+    await settle();
+
+    expect(bResolved).toEqual(['settled at the cap']);
+    expect(A.buildReport(started.callId, 'resolved')?.outcome).toBe('resolved');
+    expect(B.buildReport(joined.callId, 'resolved')?.summary).toBe('settled at the cap');
     A.close();
     B.close();
   });

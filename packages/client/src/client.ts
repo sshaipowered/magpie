@@ -13,7 +13,7 @@ import {
   decodeResolution,
   encodeHello,
   encodeResolution,
-  IDENTITY_TURN_BUDGET,
+  RESERVED_TURN_BUDGET,
 } from '@magpie/protocol';
 import type {
   Extension,
@@ -145,12 +145,11 @@ export class MagpieClient {
 
     // Clamp client-side too; the relay re-clamps, but never send nonsense.
     const requested = opts.maxTurns ?? DEFAULT_MAX_TURNS;
-    // The relay counts every sealed send, hello frames included, so reserve
-    // their budget on top of what the caller asked for. Otherwise a caller's
-    // maxTurns=4 would quietly become two real messages. Unconditional: the
-    // opener always sends a hello (it carries the topic), and the opener
-    // cannot know whether the joiner will send one.
-    const maxTurns = Math.max(1, Math.min(requested + IDENTITY_TURN_BUDGET, ABSOLUTE_MAX_TURNS));
+    // The relay counts every sealed send — two hellos and the closing resolve
+    // included — so reserve their budget on top of what the caller asked for.
+    // Unconditional: both sides always send a hello, and only one side ever
+    // resolves, so the reservation is the same for every call.
+    const maxTurns = Math.max(1, Math.min(requested + RESERVED_TURN_BUDGET, ABSOLUTE_MAX_TURNS));
 
     const send: OpenFrame = {
       t: 'open',
@@ -315,7 +314,7 @@ export class MagpieClient {
    * without attribution or a title is still a call.
    *
    * ALWAYS sent, even as an empty envelope: the opener reserves exactly
-   * IDENTITY_TURN_BUDGET (2) relay turns for hellos and cannot know whether
+   * RESERVED_TURN_BUDGET relay turns for hellos and cannot know whether
    * the joiner has anything to say. If a joiner with no key sent nothing, one
    * reserved turn would go unspent and the caller's cap would be one message
    * looser than asked. An empty hello costs ~60 sealed bytes.

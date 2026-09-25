@@ -15,12 +15,17 @@ export const DEFAULT_MAX_TURNS = 12;
 export const ABSOLUTE_MAX_TURNS = 50;
 
 /**
- * Sealed frames each side may spend on identity announcement, on top of the
- * caller's turn budget. The relay cannot see message types, so it counts every
- * sealed send as a turn; a client that announces identity adds this to the cap
- * it requests so the caller's `maxTurns` still means "messages between agents".
+ * Sealed frames a call spends on bookkeeping, on top of the caller's turn
+ * budget. The relay cannot see message types, so it counts every sealed send as
+ * a turn; a client adds this to the cap it requests so the caller's `maxTurns`
+ * keeps meaning "messages between the agents".
+ *
+ * Three: one hello per side, plus the one resolve frame that ends the call. It
+ * was two, which paid for the hellos and forgot the resolve, so a call at its
+ * cap had the resolve rejected — the resolver recorded `resolved` while the peer
+ * recorded `turn-cap` with a null summary for the same call.
  */
-export const IDENTITY_TURN_BUDGET = 2;
+export const RESERVED_TURN_BUDGET = 3;
 
 /** A pairing code is single-use and expires this long after `start`. */
 export const PAIRING_TTL_MS = 10 * 60 * 1000; // 10 minutes

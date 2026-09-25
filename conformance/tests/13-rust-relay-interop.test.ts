@@ -284,19 +284,28 @@ describe('conformance/13 Rust relay interop (binary, via TS client)', () => {
     );
     await alice.waitForMessage(1);
 
+    // Turn 3: the reserved budget covers two hellos and one resolve; a call that
+    // never resolves spends that reservation on an ordinary message, so this one
+    // still gets through.
+    await alice.client.send(
+      callId,
+      makeMessage({ callId, from: ALICE, to: BOB, type: 'query', content: 'q2', turn: 2 }),
+    );
+    await bob.waitForMessage(2);
+
     // The capping send: delivery is refused, the call is closed, both ends hung up.
     const aHang = alice.waitForHangup();
     const bHang = bob.waitForHangup();
     await alice.client.send(
       callId,
-      makeMessage({ callId, from: ALICE, to: BOB, type: 'query', content: 'q2 (over cap)' }),
+      makeMessage({ callId, from: ALICE, to: BOB, type: 'query', content: 'q3 (over cap)', turn: 3 }),
     );
     const [ra, rb] = await Promise.all([aHang, bHang]);
     expect(ra).toMatch(/turn cap/);
     expect(rb).toMatch(/turn cap/);
 
     // The over-cap query was never delivered to Bob (cap precedes routing).
-    expect(bob.inbox).toHaveLength(1);
+    expect(bob.inbox).toHaveLength(2);
   });
 
   // Scenario 10 — a message fired the instant the peer joins must not be dropped.
