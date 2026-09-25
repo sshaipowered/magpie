@@ -41,6 +41,17 @@ threat model is usually a sign that one of them is wrong.
 Found a vulnerability rather than a bug? Do not open a PR.
 See [`SECURITY.md`](SECURITY.md).
 
+## Before tagging a release
+
+```bash
+scripts/preflight.sh
+```
+
+It rebuilds from a clean tree, exactly as CI does. A warm checkout hides
+missing project references behind leftover `dist/` output; that is how a
+release once failed on every platform after all local checks passed. The
+global pre-push hook runs this automatically for `v*` tags.
+
 ## PRs
 
 - Branch off `main`. CI (`ts` and `rust`) must be green before merge.
