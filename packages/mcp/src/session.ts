@@ -698,13 +698,17 @@ export class SessionStore {
         const session = this.#sessions.get(msg.callId);
         if (session) session.ingest(msg);
       });
-      client.onHangup((reason) => {
-        // The wire-level hangup frame doesn't carry a callId in onHangup's
-        // signature; close every session ON THIS CLIENT defensively. In
-        // practice a relay hangup targets a specific call, but failing safe
-        // is correct — and it must not leak across relays.
-        for (const s of this.#sessions.values()) {
-          if (s.client === client) s.markClosed(reason);
+      client.onHangup((reason, callId) => {
+        if (callId) {
+          // One call ended. Closing the rest would truncate unrelated live
+          // calls and write them a `disconnected` report they never earned.
+          const session = this.#sessions.get(callId);
+          if (session?.client === client) session.markClosed(reason);
+        } else {
+          // The socket itself dropped, so every call on this client is over.
+          for (const s of this.#sessions.values()) {
+            if (s.client === client) s.markClosed(reason);
+          }
         }
         // If the underlying socket dropped, evict this client from the cache
         // so the next start/join reconnects instead of reusing a dead socket.

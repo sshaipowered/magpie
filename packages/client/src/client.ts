@@ -35,7 +35,12 @@ import type {
 import { parseRelayFrame } from './wire.js';
 
 type MessageCb = (msg: Message) => void;
-type HangupCb = (reason: string) => void;
+/**
+ * `callId` names the call the relay hung up; null means the socket itself
+ * dropped, which ends every call on this client. It is the second parameter so
+ * that listeners which only care about the reason keep working unchanged.
+ */
+type HangupCb = (reason: string, callId: string | null) => void;
 type PeerJoinedCb = (callId: string, peer: Extension) => void;
 type ResolvedCb = (callId: string, summary: string, resolution: Resolution) => void;
 
@@ -473,8 +478,10 @@ export class MagpieClient {
         return;
       }
       case 'hangup': {
+        // Pass the callId through. Dropping it made a session layer close every
+        // call on this client, silently truncating unrelated live calls.
         this.#channels.delete(frame.callId);
-        for (const cb of this.#hangupCbs) cb(frame.reason);
+        for (const cb of this.#hangupCbs) cb(frame.reason, frame.callId);
         return;
       }
       case 'error': {
@@ -572,7 +579,7 @@ export class MagpieClient {
     // and invalidate any memoized reference to this now-dead client.
     for (const cb of this.#hangupCbs) {
       try {
-        cb(reason);
+        cb(reason, null);
       } catch {
         // a listener must not break teardown
       }

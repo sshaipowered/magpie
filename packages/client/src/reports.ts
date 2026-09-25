@@ -1,5 +1,6 @@
-import { join } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
+import { CallId } from '@magpie/protocol';
 import type { CallOutcome, CallReport } from '@magpie/protocol';
 import { magpieHome } from './home.js';
 
@@ -19,10 +20,30 @@ export function callsDir(): string {
   return join(magpieHome(), CALLS_DIR);
 }
 
+/**
+ * Resolve `<calls dir>/<callId>.json` and refuse anything that lands outside
+ * the directory. The wire layer already rejects a callId that fails the schema;
+ * this is the second line, because the value comes from the relay and a path is
+ * the one place where getting it wrong writes to an arbitrary file.
+ */
+function reportPath(callId: string): string {
+  // The schema is the real guard: it admits no separator and no dots, so no
+  // value that passes it can name anything but a file in this directory.
+  if (!CallId.safeParse(callId).success) {
+    throw new Error(`refusing a report path for a malformed callId: ${callId}`);
+  }
+  const dir = resolve(callsDir());
+  const path = resolve(dir, `${callId}.json`);
+  if (dirname(path) !== dir) {
+    throw new Error(`refusing a report path outside ${dir}: ${callId}`);
+  }
+  return path;
+}
+
 /** Persist a report. Returns the file path. */
 export function saveReport(r: CallReport): string {
+  const path = reportPath(r.callId);
   mkdirSync(callsDir(), { recursive: true });
-  const path = join(callsDir(), `${r.callId}.json`);
   writeFileSync(path, JSON.stringify(r, null, 2), { encoding: 'utf8', mode: 0o600 });
   return path;
 }
@@ -45,7 +66,12 @@ export function listReports(): CallReport[] {
 
 /** One report by callId, or null. */
 export function readReport(callId: string): CallReport | null {
-  const path = join(callsDir(), `${callId}.json`);
+  let path: string;
+  try {
+    path = reportPath(callId);
+  } catch {
+    return null;
+  }
   if (!existsSync(path)) return null;
   try {
     return JSON.parse(readFileSync(path, 'utf8')) as CallReport;

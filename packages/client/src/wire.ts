@@ -9,6 +9,7 @@
  * structural (plain interfaces) — they are validated defensively on receipt.
  */
 
+import { CallId } from '@magpie/protocol';
 import type { Extension } from '@magpie/protocol';
 
 // ---- Client -> Relay -------------------------------------------------------
@@ -92,26 +93,34 @@ export type RelayToClient =
  * Defense in depth: the relay is semi-trusted (it routes our ciphertext) but
  * we still never trust the SHAPE of what arrives off the wire.
  */
+/**
+ * A relay-supplied callId reaches the filesystem: reports are written to
+ * `<calls dir>/<callId>.json`. Accepting any string let a hostile or broken
+ * relay escape that directory, so every frame is checked against the schema
+ * here, at the boundary, before the id is used for anything.
+ */
+const isCallId = (v: unknown): v is string => typeof v === 'string' && CallId.safeParse(v).success;
+
 export function parseRelayFrame(raw: unknown): RelayToClient | null {
   if (typeof raw !== 'object' || raw === null) return null;
   const f = raw as Record<string, unknown>;
   switch (f.t) {
     case 'opened':
-      return typeof f.callId === 'string' ? { t: 'opened', callId: f.callId } : null;
+      return isCallId(f.callId) ? { t: 'opened', callId: f.callId } : null;
     case 'joined':
-      return typeof f.callId === 'string' && typeof f.peer === 'string'
+      return isCallId(f.callId) && typeof f.peer === 'string'
         ? { t: 'joined', callId: f.callId, peer: f.peer }
         : null;
     case 'peer-joined':
-      return typeof f.callId === 'string' && typeof f.peer === 'string'
+      return isCallId(f.callId) && typeof f.peer === 'string'
         ? { t: 'peer-joined', callId: f.callId, peer: f.peer }
         : null;
     case 'deliver':
-      return typeof f.callId === 'string' && typeof f.frame === 'string'
+      return isCallId(f.callId) && typeof f.frame === 'string'
         ? { t: 'deliver', callId: f.callId, frame: f.frame }
         : null;
     case 'hangup':
-      return typeof f.callId === 'string' && typeof f.reason === 'string'
+      return isCallId(f.callId) && typeof f.reason === 'string'
         ? { t: 'hangup', callId: f.callId, reason: f.reason }
         : null;
     case 'error':

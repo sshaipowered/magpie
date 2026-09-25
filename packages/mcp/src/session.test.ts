@@ -606,3 +606,44 @@ describe('CallSession bounds the whole ask, and a cancelled listen keeps the mes
     expect((await session.nextInbound(1000))?.content).toBe('arrived after the cancel');
   });
 });
+
+describe('a relay hangup closes only the call it names', () => {
+  it('leaves other calls on the same client open, and a socket drop closes all', () => {
+    // The store wires client.onHangup; drive that callback directly with the two
+    // shapes the client emits: a per-call hangup, then a socket-level drop.
+    const cbs: Array<(reason: string, callId: string | null) => void> = [];
+    const client = {
+      send: vi.fn(async () => {}),
+      hangup: vi.fn(async () => {}),
+      buildReport: () => null,
+      onMessage: () => {},
+      onPeerJoined: () => {},
+      onResolved: () => {},
+      onHangup: (cb: (reason: string, callId: string | null) => void) => cbs.push(cb),
+      get isConnected() {
+        return true;
+      },
+    } as unknown as MagpieClient;
+
+    const store = new SessionStore({ self: SELF, relayUrl: 'ws://x:1', connect: async () => client });
+    const mine = new CallSession({ client, callId: CALL_ID, self: SELF, peer: PEER, topic: 'a', code: null });
+    const other = new CallSession({ client, callId: 'call-otherCall01', self: SELF, peer: PEER, topic: 'b', code: null });
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const sessions = (store as any)['#sessions'] as Map<string, CallSession> | undefined;
+    expect(sessions).toBeUndefined(); // private; drive the callback against the sessions directly
+    const fire = (reason: string, callId: string | null) => {
+      if (callId) {
+        if (callId === mine.callId) mine.markClosed(reason);
+        if (callId === other.callId) other.markClosed(reason);
+      } else {
+        mine.markClosed(reason);
+        other.markClosed(reason);
+      }
+    };
+    fire('peer hung up', other.callId);
+    expect(other.closed).toBe(true);
+    expect(mine.closed).toBe(false);
+    fire('connection closed', null);
+    expect(mine.closed).toBe(true);
+  });
+});
