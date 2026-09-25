@@ -9,7 +9,7 @@
  * structural (plain interfaces) — they are validated defensively on receipt.
  */
 
-import type { Extension } from '@magpie/protocol';
+import { CallId, Extension } from '@magpie/protocol';
 
 // ---- Client -> Relay -------------------------------------------------------
 
@@ -95,28 +95,29 @@ export type RelayToClient =
 export function parseRelayFrame(raw: unknown): RelayToClient | null {
   if (typeof raw !== 'object' || raw === null) return null;
   const f = raw as Record<string, unknown>;
+  if (f.t === 'error') {
+    return typeof f.code === 'string' && typeof f.message === 'string'
+      ? { t: 'error', code: f.code, message: f.message }
+      : null;
+  }
+  const id = CallId.safeParse(f.callId);
+  if (!id.success) return null;
+  const callId = id.data;
   switch (f.t) {
     case 'opened':
-      return typeof f.callId === 'string' ? { t: 'opened', callId: f.callId } : null;
+      return { t: 'opened', callId };
     case 'joined':
-      return typeof f.callId === 'string' && typeof f.peer === 'string'
-        ? { t: 'joined', callId: f.callId, peer: f.peer }
-        : null;
-    case 'peer-joined':
-      return typeof f.callId === 'string' && typeof f.peer === 'string'
-        ? { t: 'peer-joined', callId: f.callId, peer: f.peer }
-        : null;
+    case 'peer-joined': {
+      const peer = Extension.safeParse(f.peer);
+      return peer.success ? { t: f.t, callId, peer: peer.data } : null;
+    }
     case 'deliver':
-      return typeof f.callId === 'string' && typeof f.frame === 'string'
-        ? { t: 'deliver', callId: f.callId, frame: f.frame }
+      return typeof f.frame === 'string'
+        ? { t: 'deliver', callId, frame: f.frame }
         : null;
     case 'hangup':
-      return typeof f.callId === 'string' && typeof f.reason === 'string'
-        ? { t: 'hangup', callId: f.callId, reason: f.reason }
-        : null;
-    case 'error':
-      return typeof f.code === 'string' && typeof f.message === 'string'
-        ? { t: 'error', code: f.code, message: f.message }
+      return typeof f.reason === 'string'
+        ? { t: 'hangup', callId, reason: f.reason }
         : null;
     default:
       return null;

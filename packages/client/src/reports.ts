@@ -1,6 +1,6 @@
-import { join } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
-import type { CallOutcome, CallReport } from '@magpie/protocol';
+import { CallId, type CallOutcome, type CallReport } from '@magpie/protocol';
 import { magpieHome } from './home.js';
 
 /**
@@ -19,10 +19,18 @@ export function callsDir(): string {
   return join(magpieHome(), CALLS_DIR);
 }
 
+function reportPath(callId: string): string {
+  CallId.parse(callId);
+  const dir = resolve(callsDir());
+  const path = resolve(dir, `${callId}.json`);
+  if (dirname(path) !== dir) throw new Error('report path is outside the calls directory');
+  return path;
+}
+
 /** Persist a report. Returns the file path. */
 export function saveReport(r: CallReport): string {
+  const path = reportPath(r.callId);
   mkdirSync(callsDir(), { recursive: true });
-  const path = join(callsDir(), `${r.callId}.json`);
   writeFileSync(path, JSON.stringify(r, null, 2), { encoding: 'utf8', mode: 0o600 });
   return path;
 }
@@ -45,9 +53,9 @@ export function listReports(): CallReport[] {
 
 /** One report by callId, or null. */
 export function readReport(callId: string): CallReport | null {
-  const path = join(callsDir(), `${callId}.json`);
-  if (!existsSync(path)) return null;
   try {
+    const path = reportPath(callId);
+    if (!existsSync(path)) return null;
     return JSON.parse(readFileSync(path, 'utf8')) as CallReport;
   } catch {
     return null;
