@@ -1,6 +1,6 @@
 {
   "name": "@magpie/conformance",
-  "version": "0.3.1",
+  "version": "0.4.0",
   "private": true,
   "description": "Magpie behavioral + security conformance suite. Drives @magpie/relay and @magpie/client in-process and ports the six prior-art behavioral scenarios from claude-code-session-bridge.",
   "license": "MIT",
