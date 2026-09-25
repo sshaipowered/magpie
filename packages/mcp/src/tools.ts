@@ -430,8 +430,24 @@ export function registerMagpieTools(server: McpServer, store: SessionStore): voi
     },
     async ({ callId }) =>
       guarded(async () => {
+        // Whether a peer ever joined decides what hanging up can actually
+        // achieve, so read it before the session is gone.
+        const paired = store.require(callId).peer !== null;
         await store.hangup(callId);
-        return ok(`Call ${callId} hung up.`);
+        if (paired) return ok(`Call ${callId} hung up.`);
+        // The relay only knows how to end a LIVE call. An unpaired rendezvous
+        // stays claimable until its TTL, and saying "hung up" here would be a
+        // claim we cannot keep. Revoking it needs relay support on both
+        // implementations; until then, say so instead of implying otherwise.
+        return ok(
+          [
+            `Call ${callId} closed locally. Nobody had joined it.`,
+            ``,
+            `The pairing code CANNOT be revoked: it stays claimable until it`,
+            `expires (10 minutes from sb_start). If your human already shared it,`,
+            `tell them someone can still join, and that you will not be listening.`,
+          ].join('\n'),
+        );
       }),
   );
 }
