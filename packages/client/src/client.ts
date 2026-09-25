@@ -35,6 +35,15 @@ import type {
 import { parseRelayFrame } from './wire.js';
 
 const RESOLUTION_RECEIPT = 'magpie:resolution-received/1';
+const DEFAULT_CONTROL_TIMEOUT_MS = 10_000;
+
+function controlTimeout(value: number | undefined): number {
+  const ms = value ?? DEFAULT_CONTROL_TIMEOUT_MS;
+  if (!Number.isInteger(ms) || ms < 1 || ms > 2_147_483_647) {
+    throw new Error('control timeout must be an integer between 1 and 2147483647 ms');
+  }
+  return ms;
+}
 
 type MessageCb = (msg: Message) => void;
 type HangupCb = (reason: string, callId?: string | null) => void;
@@ -77,6 +86,7 @@ interface Pending<T> {
  */
 export class MagpieClient {
   readonly #ws: WebSocket;
+  readonly #requestTimeoutMs: number;
 
   /** Per-call E2E channel. The relay can never produce one of these. */
   readonly #channels = new Map<string, PairingChannel>();
@@ -109,30 +119,49 @@ export class MagpieClient {
   /** This side's announceable identity, or null when the caller opted out. */
   readonly #identity: IdentityRef | null;
 
-  private constructor(ws: WebSocket, identity: IdentityRef | null) {
+  private constructor(ws: WebSocket, identity: IdentityRef | null, requestTimeoutMs: number) {
     this.#ws = ws;
     this.#identity = identity;
+    this.#requestTimeoutMs = requestTimeoutMs;
     ws.on('message', (data) => this.#onWireData(data));
     ws.on('close', () => this.#onClose('connection closed'));
     ws.on('error', (err) => this.#onClose(`connection error: ${String(err)}`));
   }
 
-  /** Open a WebSocket to the relay and resolve once it is ready. */
+  /**
+   * Connect and bound relay control replies (10 seconds each by default).
+   * An open/join timeout invalidates the entire connection: without request
+   * IDs, a late reply cannot safely be assigned to a subsequent request.
+   * This also ends existing calls and pending receipts on that connection.
+   */
   static connect(
     relayUrl: string,
-    opts: { identity?: IdentityRef | null } = {},
+    opts: { identity?: IdentityRef | null; connectTimeoutMs?: number; requestTimeoutMs?: number } = {},
   ): Promise<MagpieClient> {
     return new Promise((resolve, reject) => {
+      const connectTimeoutMs = controlTimeout(opts.connectTimeoutMs);
+      const requestTimeoutMs = controlTimeout(opts.requestTimeoutMs);
       const ws = new WebSocket(relayUrl);
+      // ws.handshakeTimeout is an inactivity timeout; partial headers can
+      // refresh it indefinitely. Bound the entire attempt, including DNS/TLS.
+      const timer = setTimeout(() => {
+        ws.removeListener('open', onOpen);
+        reject(new Error(`connection timed out after ${connectTimeoutMs} ms`));
+        // Keep onError installed for the asynchronous error from terminate().
+        ws.terminate();
+      }, connectTimeoutMs);
       const onError = (err: Error) => {
-        ws.removeAllListeners();
+        clearTimeout(timer);
+        ws.removeListener('open', onOpen);
         reject(err);
       };
-      ws.once('error', onError);
-      ws.once('open', () => {
+      const onOpen = () => {
+        clearTimeout(timer);
         ws.removeListener('error', onError);
-        resolve(new MagpieClient(ws, opts.identity ?? null));
-      });
+        resolve(new MagpieClient(ws, opts.identity ?? null, requestTimeoutMs));
+      };
+      ws.once('error', onError);
+      ws.once('open', onOpen);
     });
   }
 
@@ -447,14 +476,22 @@ export class MagpieClient {
     frame: ClientToRelay,
   ): Promise<T> {
     return new Promise<T>((resolve, reject) => {
-      queue.push({ resolve, reject });
+      const timer = setTimeout(() => {
+        this.#onClose(`control ${frame.t} reply timed out after ${this.#requestTimeoutMs} ms`);
+        this.#ws.terminate();
+      }, this.#requestTimeoutMs);
+      const pending: Pending<T> = {
+        resolve: value => { clearTimeout(timer); resolve(value); },
+        reject: error => { clearTimeout(timer); reject(error); },
+      };
+      queue.push(pending);
       this.#pendingChannel.push(channel);
       try {
         this.#sendFrame(frame);
       } catch (err) {
         queue.pop();
         this.#pendingChannel.pop();
-        reject(err as Error);
+        pending.reject(err as Error);
       }
     });
   }
@@ -467,6 +504,7 @@ export class MagpieClient {
   }
 
   #onWireData(data: WebSocket.RawData): void {
+    if (this.#closed) return;
     let parsed: unknown;
     try {
       parsed = JSON.parse(data.toString());

@@ -1,4 +1,4 @@
-The reconciled repair branch passes 221 TypeScript tests; the preceding Rust relay run passed 17 tests. The hourly automation continues remaining verified work; the original development checkout and already-running interactive MCP hosts have not received these changes. [data]
+The repair branch passes 234 TypeScript tests, including 13 new control-wait regressions; the preceding Rust relay run passed 17 tests. The hourly automation continues remaining verified work; the original development checkout and already-running interactive MCP hosts have not received these changes. [data]
 
 The coordinator and Claude maintainer exchanged implementation findings directly through Magpie call `call-hGvZDhh97Q4DA9q0`. The coordinator independently reviewed and tested the maintainer's changes. The earlier design agreement is recorded in call `call-aR3rDR49YM1HGWwF`. [action]
 
@@ -30,7 +30,15 @@ The final permission-free run on `ee818fc` completed successfully on call `call-
 
 The remaining rollout task must verify deployment into the original checkout and refresh the relevant runtime only after checking its current state and active calls. Neither a source build nor passing tests updates an already-running MCP process. The shared localhost relay must not be killed while another call uses it. [data]
 
-The next review must bound raw client open/join waits and inspect retention of closed sessions in long-running MCP hosts. The current scheduled-worker deadline limits each owned process; it is not a substitute for those library-level lifecycle bounds. [inference]
+The coordinator reproduced three unbounded waits against real local sockets: a silent WebSocket handshake, a silent open reply, and a silent join reply. Each test remained pending before the repair and passed afterward. The client now defaults both connection establishment and open/join reply waits to 10 seconds, with validated per-client overrides. A control-reply timeout invalidates the entire connection and rejects pending operations, including receipts. This deliberately ends unrelated calls on that connection because the wire has no request IDs; retaining the connection after removing a FIFO slot could assign a late reply to another request. [data]
+
+The first implementation used the WebSocket library's handshake timeout. Both reviewers initially accepted it, but the coordinator reproduced an additional failure: incomplete HTTP headers arriving every ten milliseconds kept a forty-millisecond connection attempt pending past five hundred milliseconds. That timeout measures inactivity. The client now uses a separate total-attempt timer and terminates the socket when it expires. The dripping-header regression passes. [data]
+
+The existing three-second resolution/hangup receipt deadline remains unchanged. It bounds confirmation on an established call; the new ten-second setting bounds relay connection establishment and open/join control replies. The new tests cover invalid durations, simultaneous pending requests and a hangup receipt, existing-call notification, timer cancellation after successful/error replies, explicit close, TCP cleanup, and rejection of reuse. The build and all 234 tests passed. [data]
+
+The fresh supervised maintainer re-reviewed the total-attempt correction on call `call-_Pv_qw8C6udA2Bwc` and approved the scoped repair with no contested items. Its actual Claude session was `5a03d83d-ee57-4b03-b0e2-cec2c6643f7d`, not the original interactive session. The review endpoints started at runtime revision `ff01e40`; rebuilding during review did not replace their loaded code. New client behavior was verified by fresh test processes. Both endpoint reports resolved with matching summaries, agreed points, contested points, and all seven transcript entries. The supervisor recorded `completed`; the coordinator, Claude child, and MCP child exited, and the worker lock was released. The shared relay remains running. The original checkout remains clean at `f143a73`. [data]
+
+The next review must inspect retention of closed sessions in long-running MCP hosts. The scheduled-worker deadline limits each owned process; it is not a substitute for library-level retention bounds. Runtime rollout remains pending under the no-merge automation contract. [inference]
 
 ## Automation contract
 
@@ -43,5 +51,7 @@ The automation makes reviewed local commits only. It preserves the original inte
 ## Falsification and limitations
 
 Any lost message, cross-call termination, unconfirmed success, duplicate worker, or surviving owned child invalidates the relevant completion claim. Receipt confirmation proves that the peer received a specific conclusion; it does not prove that a human approved it or that both agents chose the same conclusion during a race. [inference]
+
+The control-wait repair is disproved if an incomplete handshake or unanswered open/join remains pending past its configured deadline while the event loop is running, or if a timed-out connection remains reusable. JavaScript timers cannot enforce wall-clock deadlines while the process is suspended or its event loop is blocked. A control timeout intentionally closes every call sharing the affected socket. [inference]
 
 Process-group cleanup covers owned POSIX descendants that remain in the group. An operating-system crash, a SIGKILL of the supervisor, or a deliberately detached descendant requires recovery inspection; this batch does not claim universal cleanup under those conditions. The original interactive hosts still use their previously loaded code. [data]
