@@ -18,6 +18,10 @@ The relay counts opaque sealed frames, not semantic conversation turns. The clie
 
 ## Remaining work
 
+The durable worktree is `/Users/sanghoon/Desktop/saway/.magpie-worktrees/communication-lifecycle`, branch `fix/communication-lifecycle`. The five repair commits are `32b32d1`, `0d13935`, `6af748a`, `06c568c`, and `1ae9d49`. The maintainer call has resolved, and its Claude process and MCP child have exited. The shared localhost relay remains running for other sessions. [data]
+
+The original `main` independently advanced to `f143a73` during this batch, with overlapping commits `fa0032f`, `20d3d1c`, `418ce00`, and `f143a73`. The next run must compare and reconcile these changes inside the isolated worktree before duplicating further repairs. The coordinator must check whether another worker still owns the original development files. [data]
+
 The next run must reproduce simultaneous `resolve` calls with different conclusions and define a deterministic result. Both agents identified a possible disagreement between the two saved summaries; this case is not yet repaired. [inference]
 
 The next run must exercise `scripts/review-peer.mjs` with an actual fresh Claude process and confirm its saved result, direct Magpie exchange, call closure, and child cleanup. Unit tests cover the supervisor, but the complete launcher has not yet been exercised. [data]
