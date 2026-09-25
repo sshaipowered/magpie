@@ -368,7 +368,7 @@ export class MagpieClient {
    * without attribution or a title is still a call.
    *
    * ALWAYS sent, even as an empty envelope: the opener reserves exactly
-   * IDENTITY_TURN_BUDGET (2) relay turns for hellos and cannot know whether
+   * RESERVED_TURN_BUDGET relay turns for bookkeeping frames and cannot know whether
    * the joiner has anything to say. If a joiner with no key sent nothing, one
    * reserved turn would go unspent and the caller's cap would be one message
    * looser than asked. An empty hello costs ~60 sealed bytes.

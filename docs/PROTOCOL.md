@@ -95,6 +95,12 @@ between agents". Unused control slots may be consumed by ordinary messages becau
 The receiver acknowledges a resolution with a sealed `system` message whose content
 is `magpie:resolution-received/1` and whose `inReplyTo` is the resolution ID.
 The sender reports success only after this exact receipt and relay-confirmed hangup.
+**Compatibility: the receipt is required from v0.4.0. Both endpoints must run
+≥0.4.0.** A 0.3.x peer never sends one, so a 0.4.0 resolver against it fails after
+the 3-second receipt window while the 0.3.x side records `resolved` — the two
+reports disagree. That is accepted as a coordinated upgrade for a small team,
+not papered over with a third outcome.
+
 A missing receipt, an unsupported old peer, or a cap breach returns an unconfirmed
 error. A hangup alone never proves that the conclusion was received. [data]
 

@@ -16,8 +16,6 @@ export const ABSOLUTE_MAX_TURNS = 50;
 
 /** Two hello frames, one resolution, and its correlated receipt. */
 export const RESERVED_TURN_BUDGET = 4;
-/** The hello-only portion, retained for callers that used the earlier export. */
-export const IDENTITY_TURN_BUDGET = 2;
 
 /** A pairing code is single-use and expires this long after `start`. */
 export const PAIRING_TTL_MS = 10 * 60 * 1000; // 10 minutes
