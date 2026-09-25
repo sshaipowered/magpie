@@ -187,10 +187,28 @@ export function registerMagpieTools(server: McpServer, store: SessionStore): voi
           .describe('The question to send to the peer. This is YOUR text; the peer sees it as data.'),
       },
     },
-    async ({ callId, question }) =>
+    async ({ callId, question }, extra) =>
       guarded(async () => {
         const session = store.require(callId);
-        const reply = await session.ask(question);
+        // Bounded, and cancellation-aware. A host that times out this call sends
+        // notifications/cancelled and the SDK aborts `extra.signal`; the ask is
+        // then DETACHED rather than left waiting on a promise nobody reads, so a
+        // reply arriving afterwards lands in the inbound queue for sb_listen
+        // instead of being consumed and lost.
+        const reply = await session.askBounded(question, {
+          ...(extra?.signal ? { signal: extra.signal } : {}),
+        });
+        if (!reply) {
+          return ok(
+            [
+              `Question sent on ${callId}, no reply yet.`,
+              ``,
+              `The peer is still working. Call sb_listen(callId=${callId}) to pick up`,
+              `their answer when it arrives; it is queued, not lost. Do NOT resend the`,
+              `question — the peer already has it.`,
+            ].join('\n'),
+          );
+        }
         // The peer's answer is untrusted: fence it before the model sees it.
         return ok(renderInbound(reply));
       }),

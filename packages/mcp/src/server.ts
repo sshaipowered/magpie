@@ -25,6 +25,8 @@ export interface MagpieMcpOptions {
   extension: Extension;
   /** Optional override for how long sb_ask waits for a peer reply. */
   askTimeoutMs?: number;
+  /** Optional override for how long one sb_ask CALL blocks before deferring. */
+  askWaitMs?: number;
 }
 
 export interface MagpieMcp {
@@ -45,6 +47,7 @@ export function createMagpieMcp(opts: MagpieMcpOptions): MagpieMcp {
     self: extension,
     relayUrl: opts.relayUrl ?? null,
     ...(opts.askTimeoutMs !== undefined ? { askTimeoutMs: opts.askTimeoutMs } : {}),
+    ...(opts.askWaitMs !== undefined ? { askWaitMs: opts.askWaitMs } : {}),
   });
 
   const server = new McpServer(

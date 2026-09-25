@@ -40,6 +40,13 @@ async function main(): Promise<void> {
     warn: (m) => process.stderr.write(`[magpie-mcp] ${m}\n`),
   });
 
+  const askWaitRaw = process.env.MAGPIE_ASK_WAIT_MS;
+  const askWaitMs = askWaitRaw !== undefined ? Number.parseInt(askWaitRaw, 10) : undefined;
+  if (askWaitMs !== undefined && (!Number.isInteger(askWaitMs) || askWaitMs <= 0)) {
+    process.stderr.write(`[magpie-mcp] invalid MAGPIE_ASK_WAIT_MS: ${askWaitRaw}\n`);
+    process.exit(1);
+  }
+
   const askTimeoutRaw = process.env.MAGPIE_ASK_TIMEOUT_MS;
   const askTimeoutMs =
     askTimeoutRaw !== undefined ? Number.parseInt(askTimeoutRaw, 10) : undefined;
@@ -54,6 +61,7 @@ async function main(): Promise<void> {
       ...(relayUrl ? { relayUrl } : {}),
       extension, // validated inside createMagpieMcp; throws on bad shape
       ...(askTimeoutMs !== undefined ? { askTimeoutMs } : {}),
+      ...(askWaitMs !== undefined ? { askWaitMs } : {}),
     });
   } catch (err) {
     process.stderr.write(

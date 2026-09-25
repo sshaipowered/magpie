@@ -523,3 +523,54 @@ describe('CallSession persists a report at close (the AX hand-off artifact)', ()
     expect(resolved[0]).toEqual({ callId: CALL_ID, summary: r });
   });
 });
+
+describe('CallSession.askBounded does not lose a reply the caller stopped waiting for', () => {
+  it('returns null on abort and queues a reply that arrives afterwards', async () => {
+    const { client, sent } = fakeClient();
+    const session = newSession(client);
+    const ac = new AbortController();
+
+    const pending = session.askBounded('q', { signal: ac.signal });
+    await Promise.resolve();
+    ac.abort();
+    expect(await pending).toBeNull();
+
+    // The peer answers after the caller gave up. Before this fix `ingest` matched
+    // it to a promise nobody was reading and dropped it.
+    const query = sent.at(-1)!;
+    session.ingest({ ...query, id: 'msg-lateReply00', type: 'response', inReplyTo: query.id, content: 'late' });
+    const got = await session.nextInbound(1000);
+    expect(got?.content).toBe('late');
+    expect(session.closed).toBe(false);
+  });
+
+  it('returns null when its own wait bound expires, and still queues the reply', async () => {
+    const { client, sent } = fakeClient();
+    const session = newSession(client);
+
+    expect(await session.askBounded('q', { waitMs: 5 })).toBeNull();
+    const query = sent.at(-1)!;
+    session.ingest({ ...query, id: 'msg-lateReply01', type: 'response', inReplyTo: query.id, content: 'also late' });
+    expect((await session.nextInbound(1000))?.content).toBe('also late');
+  });
+
+  it('returns the reply when it arrives inside the bound, and does not queue it twice', async () => {
+    const { client, sent } = fakeClient();
+    const session = newSession(client);
+
+    const pending = session.askBounded('q', { waitMs: 5000 });
+    await Promise.resolve();
+    const query = sent.at(-1)!;
+    session.ingest({ ...query, id: 'msg-promptReply0', type: 'response', inReplyTo: query.id, content: 'on time' });
+    expect((await pending)?.content).toBe('on time');
+    expect(await session.nextInbound(20)).toBeNull();
+  });
+
+  it('refuses to send when the caller is already gone', async () => {
+    const { client, sent } = fakeClient();
+    const session = newSession(client);
+    const before = sent.length;
+    await expect(session.askBounded('q', { signal: AbortSignal.abort() })).rejects.toThrow(/cancelled/);
+    expect(sent.length).toBe(before);
+  });
+});

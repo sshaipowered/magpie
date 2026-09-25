@@ -67,6 +67,16 @@ export interface SessionInfo {
 const DEFAULT_ASK_TIMEOUT_MS = 15 * 60 * 1000;
 
 /**
+ * How long a single sb_ask call blocks before handing control back.
+ *
+ * An MCP host abandons a tool call on its own deadline (300s observed) and the
+ * server is never told. The reply window above is deliberately far longer than
+ * that, so the wait has to end here, below the host's limit, and end in a way
+ * that keeps a late reply retrievable. See `askBounded`.
+ */
+const DEFAULT_ASK_WAIT_MS = 4 * 60 * 1000;
+
+/**
  * How long `sb_ask` will wait for the peer to JOIN before sending, when asked
  * on a call nobody has joined yet. Matches the pairing-code TTL horizon: the
  * human shares the invite out-of-band and the peer joins whenever they can.
@@ -120,6 +130,7 @@ export class CallSession {
 
   readonly #client: MagpieClient;
   readonly #askTimeoutMs: number;
+  readonly #askWaitMs: number;
 
   constructor(opts: {
     client: MagpieClient;
@@ -129,6 +140,7 @@ export class CallSession {
     topic: string;
     code: string | null;
     askTimeoutMs?: number;
+    askWaitMs?: number;
   }) {
     this.#client = opts.client;
     this.callId = opts.callId;
@@ -137,6 +149,7 @@ export class CallSession {
     this.topic = opts.topic;
     this.code = opts.code;
     this.#askTimeoutMs = opts.askTimeoutMs ?? DEFAULT_ASK_TIMEOUT_MS;
+    this.#askWaitMs = opts.askWaitMs ?? DEFAULT_ASK_WAIT_MS;
   }
 
   get closed(): boolean {
@@ -288,6 +301,73 @@ export class CallSession {
    * long to wait for the answer once sent.
    */
   async ask(question: string, replyTimeoutMs?: number, peerWaitMs?: number): Promise<Message> {
+    const { reply } = await this.#startAsk(question, replyTimeoutMs, peerWaitMs);
+    return reply;
+  }
+
+  /**
+   * Like `ask`, but stops WAITING after `waitMs` and returns null instead of
+   * rejecting, leaving the peer free to answer late.
+   *
+   * The reason this exists: an MCP host gives up on a tool call after its own
+   * deadline and tells the server nothing. The ask stayed registered, so when
+   * the reply finally arrived `ingest` matched it to a promise nobody was
+   * awaiting any more, consumed it, and never queued it — the peer's answer was
+   * in the transcript but unreachable through sb_listen. Ending the wait here
+   * and DETACHING the ask makes that same reply fall through to the inbound
+   * queue, where sb_listen picks it up.
+   */
+  async askBounded(
+    question: string,
+    opts: {
+      /** Upper bound on this call's wait. Defaults to DEFAULT_ASK_WAIT_MS. */
+      waitMs?: number;
+      replyTimeoutMs?: number;
+      peerWaitMs?: number;
+      /**
+       * The MCP request's abort signal. This is the exact stop condition: a host
+       * that times out a tool call sends notifications/cancelled and the SDK
+       * aborts the handler, so we learn the caller is gone instead of guessing
+       * its deadline. `waitMs` stays as the fallback for hosts that cancel
+       * nothing.
+       */
+      signal?: AbortSignal;
+    } = {},
+  ): Promise<Message | null> {
+    const { waitMs, replyTimeoutMs, peerWaitMs, signal } = opts;
+    if (signal?.aborted) throw new Error('sb_ask was cancelled before the question was sent');
+    const { id, reply } = await this.#startAsk(question, replyTimeoutMs, peerWaitMs);
+    const expired = Symbol('expired');
+    const deadline = new Promise<typeof expired>((resolve) => {
+      const t = setTimeout(() => resolve(expired), waitMs ?? this.#askWaitMs);
+      if (typeof t === 'object' && 'unref' in t) t.unref();
+      signal?.addEventListener('abort', () => resolve(expired), { once: true });
+      if (signal?.aborted) resolve(expired);
+    });
+    // Settle the reply into a value either way so Promise.race cannot reject
+    // before we have decided which side won.
+    const settled = reply.then(
+      (m) => ({ ok: true as const, m }),
+      (e: unknown) => ({ ok: false as const, e }),
+    );
+    const winner = await Promise.race([settled, deadline]);
+    if (winner === expired) {
+      // Only give up if the ask is still outstanding. If it is already gone the
+      // reply landed in the same tick as the deadline; await it rather than
+      // discarding a message we have in hand.
+      if (this.#detachAsk(id)) return null;
+      return reply;
+    }
+    if (winner.ok) return winner.m;
+    throw winner.e;
+  }
+
+  /** Put a query on the wire and register its pending reply. */
+  async #startAsk(
+    question: string,
+    replyTimeoutMs?: number,
+    peerWaitMs?: number,
+  ): Promise<{ id: string; reply: Promise<Message> }> {
     this.#assertNotClosed();
     // Ask-before-join: if nobody has joined yet, block until the peer arrives
     // rather than erroring. When a peer is already present (the common case)
@@ -312,14 +392,25 @@ export class CallSession {
     try {
       await this.#client.send(this.callId, query);
     } catch (err) {
-      const w = this.#awaiting.get(id);
-      if (w) {
-        clearTimeout(w.timer);
-        this.#awaiting.delete(id);
-      }
+      this.#detachAsk(id);
+      // Nothing is awaiting `reply` yet, so its rejection would be unhandled.
+      reply.catch(() => {});
       throw err;
     }
-    return reply;
+    return { id, reply };
+  }
+
+  /**
+   * Stop tracking a pending ask WITHOUT rejecting it. A reply that arrives
+   * afterwards no longer matches a waiter, so `ingest` queues it for
+   * `sb_listen`. Returns false if the ask was already settled.
+   */
+  #detachAsk(id: string): boolean {
+    const w = this.#awaiting.get(id);
+    if (!w) return false;
+    clearTimeout(w.timer);
+    this.#awaiting.delete(id);
+    return true;
   }
 
   /**
@@ -499,6 +590,7 @@ export class SessionStore {
   readonly self: Extension;
   readonly #defaultRelayUrl: string | null;
   readonly #askTimeoutMs: number | undefined;
+  readonly #askWaitMs: number | undefined;
   readonly #connect: (url: string) => Promise<MagpieClient>;
 
   /** Lazily-connected clients keyed by relay URL (memoized promises). */
@@ -511,12 +603,14 @@ export class SessionStore {
     /** Default relay (env MAGPIE_RELAY_URL). Null = invite-carried URLs only. */
     relayUrl?: string | null;
     askTimeoutMs?: number;
+    askWaitMs?: number;
     /** Test seam: how to open a relay connection. Defaults to MagpieClient.connect. */
     connect?: (url: string) => Promise<MagpieClient>;
   }) {
     this.self = opts.self;
     this.#defaultRelayUrl = opts.relayUrl ?? null;
     this.#askTimeoutMs = opts.askTimeoutMs;
+    this.#askWaitMs = opts.askWaitMs;
     this.#connect = opts.connect ?? ((url) => MagpieClient.connect(url, { identity: this.identityRef }));
   }
 
@@ -623,6 +717,7 @@ export class SessionStore {
       topic,
       code: opened.code,
       ...(this.#askTimeoutMs !== undefined ? { askTimeoutMs: this.#askTimeoutMs } : {}),
+      ...(this.#askWaitMs !== undefined ? { askWaitMs: this.#askWaitMs } : {}),
     });
     this.#sessions.set(session.callId, session);
     return session;
@@ -646,6 +741,7 @@ export class SessionStore {
       topic: '(joined)',
       code: null,
       ...(this.#askTimeoutMs !== undefined ? { askTimeoutMs: this.#askTimeoutMs } : {}),
+      ...(this.#askWaitMs !== undefined ? { askWaitMs: this.#askWaitMs } : {}),
     });
     this.#sessions.set(session.callId, session);
     return session;
