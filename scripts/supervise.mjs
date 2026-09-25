@@ -3,13 +3,13 @@ import { mkdir, writeFile, rename, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 
 /** One POSIX process group per run. Only that owned group is ever signalled. */
-export async function supervise({ command, args = [], cwd, stateDir, timeoutMs = 900000, graceMs = 5000, signal, onOutput = () => {}, validateExit = () => undefined }) {
+export async function supervise({ command, args = [], cwd, stateDir, timeoutMs = 900000, graceMs = 5000, signal, onOutput = () => {}, validateExit = () => undefined, finalize = async () => {} }) {
   if (process.platform === 'win32') throw new Error('process-group supervision requires POSIX');
   if (!(timeoutMs > 0 && graceMs > 0)) throw new Error('timeouts must be positive');
   await mkdir(stateDir, { recursive: true });
   const lock = join(stateDir, 'active');
   await mkdir(lock); // Atomic lock; a second run must not launch another worker.
-  const result = { status: 'failed', startedAt: new Date().toISOString(), supervisorPid: process.pid };
+  const result = { status: 'running', startedAt: new Date().toISOString(), supervisorPid: process.pid };
   let child, deadline, force;
   let groupStopped = false;
   const stopGroup = (sig) => {
@@ -53,6 +53,7 @@ export async function supervise({ command, args = [], cwd, stateDir, timeoutMs =
     }
     return result;
   } catch (error) {
+    result.status = 'failed';
     result.error = String(error);
     return result;
   } finally {
@@ -62,6 +63,7 @@ export async function supervise({ command, args = [], cwd, stateDir, timeoutMs =
     // Also clean descendants that outlive a normally exiting parent (MCP hosts).
     stopGroup('SIGKILL');
     result.endedAt = new Date().toISOString();
+    try { await finalize(result); } catch (error) { result.status = 'failed'; result.error = String(error); }
     try {
       await writeFile(join(stateDir, 'last-result.tmp'), JSON.stringify(result, null, 2) + '\n');
       await rename(join(stateDir, 'last-result.tmp'), join(stateDir, 'last-result.json'));

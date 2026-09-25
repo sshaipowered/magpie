@@ -1,4 +1,4 @@
-The first repair batch passes 214 TypeScript tests and 17 Rust relay tests. The hourly automation continues remaining verified work; the original development checkout and already-running interactive MCP hosts have not received these changes. [data]
+The reconciled repair branch passes 221 TypeScript tests; the preceding Rust relay run passed 17 tests. The hourly automation continues remaining verified work; the original development checkout and already-running interactive MCP hosts have not received these changes. [data]
 
 The coordinator and Claude maintainer exchanged implementation findings directly through Magpie call `call-hGvZDhh97Q4DA9q0`. The coordinator independently reviewed and tested the maintainer's changes. The earlier design agreement is recorded in call `call-aR3rDR49YM1HGWwF`. [action]
 
@@ -20,11 +20,11 @@ The relay counts opaque sealed frames, not semantic conversation turns. The clie
 
 The durable worktree is `/Users/sanghoon/Desktop/saway/.magpie-worktrees/communication-lifecycle`, branch `fix/communication-lifecycle`. The five repair commits are `32b32d1`, `0d13935`, `6af748a`, `06c568c`, and `1ae9d49`. The maintainer call has resolved, and its Claude process and MCP child have exited. The shared localhost relay remains running for other sessions. [data]
 
-The original `main` independently advanced to `f143a73` during this batch, with overlapping commits `fa0032f`, `20d3d1c`, `418ce00`, and `f143a73`. The next run must compare and reconcile these changes inside the isolated worktree before duplicating further repairs. The coordinator must check whether another worker still owns the original development files. [data]
+The original `main` independently advanced to `f143a73` during this batch, with overlapping commits `fa0032f`, `20d3d1c`, `418ce00`, and `f143a73`. The coordinator reconciled these changes in local merge `b2d901f`, preserving public constants, socket-drop compatibility, and the original report-path tests. The coordinator must check whether another worker still owns the original development files. [data]
 
-The next run must reproduce simultaneous `resolve` calls with different conclusions and define a deterministic result. Both agents identified a possible disagreement between the two saved summaries; this case is not yet repaired. [inference]
+The coordinator reproduced simultaneous `resolve` calls returning two different successful summaries. Both agents agreed to reject simultaneous attempts, retain both attempted summaries, and close without agreement. Fresh client and real MCP tests now verify both failures and both non-resolved session reports. [data]
 
-The next run must exercise `scripts/review-peer.mjs` with an actual fresh Claude process and confirm its saved result, direct Magpie exchange, call closure, and child cleanup. Unit tests cover the supervisor, but the complete launcher has not yet been exercised. [data]
+A fresh supervised Claude session acknowledged runtime `9429efd` on call `call-xXQwHeFC0mqtw1D_`. A reply arriving after the 20-second ask bound was recovered with its original correlation and no answer-back instructions. The smoke run also exposed three orchestration defects: a canonical PTY truncated a long command, the peer ended the call under its three-minute idle rule, and the tool allowlist denied the peer's attempt to ask a follow-up. The run correctly reported failure. The coordinator changed terminal input mode, removed the independent idle-close rule, and allowed bidirectional asks. A second live run must verify the corrected lifecycle. [data]
 
 The next run must verify deployment into the original checkout and refresh the relevant runtime only after checking its current state and active calls. Neither a source build nor passing tests updates an already-running MCP process. The shared localhost relay must not be killed while another call uses it. [data]
 
@@ -32,9 +32,9 @@ The next review must bound raw client open/join waits and inspect retention of c
 
 ## Automation contract
 
-Each run reads this record and `git status` before choosing one concrete pending item. It opens a fresh Magpie call and launches a maintainer with `node scripts/review-peer.mjs <invite> <bounded scope>` (read-only) or the same command with `--implement` before the invite (authorized edits) from the worktree. The launcher reads this record instead of repeatedly forking the entire historical Claude conversation. The user does not relay routine messages. [action]
+Each run reads this record and `git status` before choosing one concrete pending item. When the desktop MCP host has old loaded code, `node scripts/debug-coordinator.mjs` starts an isolated fresh MCP coordinator and relay; its stdin accepts one JSON tool request per line and a final `{"name":"shutdown"}` command. It opens a fresh Magpie call and launches a maintainer with `node scripts/review-peer.mjs <invite> <bounded scope>` (read-only) or the same command with `--implement` before the invite (authorized edits) from the worktree. The launcher reads this record instead of repeatedly forking the entire historical Claude conversation. The user does not relay routine messages. [action]
 
-The launcher records `.magpie/automation/last-result.json` and `latest-peer-summary.txt`. Its atomic `active` directory prevents concurrent workers. A stale lock must be investigated using its owner metadata; a run must never remove a lock blindly or start duplicate workers. The coordinator concludes or hangs up each owned call and verifies process exit before finishing. [action]
+The launcher records `.magpie/automation/last-result.json` and `latest-peer-summary.txt`. Its atomic `active` directory prevents concurrent workers. A stale lock must be investigated using its owner metadata; a run must never remove a lock blindly or start duplicate workers. The coordinator owns normal termination; a waiting maintainer must not hang up merely because the coordinator is busy. The 15-minute supervisor deadline remains the final bound. The coordinator concludes or hangs up each owned call and verifies process exit before finishing. [action]
 
 The automation makes reviewed local commits only. It preserves the original interactive checkout and performs no automatic push, merge, or publication. It notifies the user on a meaningful change, completed batch, failure, or human-only decision. It stays quiet when nothing actionable changes and creates no speculative work once the recorded defects are resolved. [action]
 

@@ -42,6 +42,25 @@ describe('owned worker lifecycle', () => {
       await access(join(stateDir, 'active'));
     } finally { await rm(stateDir, { recursive: true, force: true }); }
   });
+  it('keeps the worker lock until final artifacts and identity are saved', async () => {
+    const stateDir = await mkdtemp(join(tmpdir(), 'magpie-finalize-'));
+    try {
+      const r = await supervise({ command: process.execPath, args: ['-e', 'process.exit(0)'], stateDir,
+        finalize: async (result: Record<string, unknown>) => {
+          await access(join(stateDir, 'active'));
+          expect(JSON.parse(await readFile(join(stateDir, 'active', 'owner.json'), 'utf8')).status).toBe('running');
+          result.peerSessionId = 'verified-session';
+        },
+      });
+      expect(JSON.parse(await readFile(join(stateDir, 'last-result.json'), 'utf8')).peerSessionId).toBe('verified-session');
+      expect(r.status).toBe('completed');
+    } finally { await rm(stateDir, { recursive: true, force: true }); }
+  });
+  it('reports final artifact failure instead of success', async () => {
+    const r = await run('process.exit(0)', { finalize: () => { throw new Error('artifact failed'); } });
+    expect(r.status).toBe('failed');
+    expect(r.error).toContain('artifact failed');
+  });
   it('reports command failure rather than completion', async () => {
     expect((await run('process.exit(7)')).status).toBe('failed');
   });
