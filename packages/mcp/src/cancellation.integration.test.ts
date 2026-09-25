@@ -259,3 +259,25 @@ describe('a recovered response is rendered as an answer, not as a new query', ()
     expect(out).not.toMatch(/call sb_answer\(callId=/);
   });
 });
+
+describe('simultaneous conclusions remain visibly unresolved', () => {
+  let h: Harness;
+  beforeEach(async () => { h = await makeHarness(); });
+  afterEach(async () => { await teardown(h); });
+
+  it('returns an MCP error and saves two closed, non-resolved session reports', async () => {
+    const { callId, b } = await paired(h);
+    const a = h.mcp.store.require(callId);
+    const left = h.rpc.callTool({ name: 'sb_resolve', arguments: { callId, summary: 'left conclusion' } });
+    const right = b.resolve('right conclusion').then(() => 'resolved', () => 'rejected');
+    expect((await left).isError).toBe(true);
+    expect(await right).toBe('rejected');
+    for (const session of [a, b]) {
+      expect(session.closed).toBe(true);
+      expect(session.lastReport?.outcome).not.toBe('resolved');
+      expect(session.lastReport?.summary).toBeNull();
+      expect(session.lastReport?.transcript.filter(e => e.type === 'resolve').map(e => e.content).sort())
+        .toEqual(['left conclusion', 'right conclusion']);
+    }
+  });
+});

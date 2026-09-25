@@ -89,8 +89,20 @@ the cap it requests in `open`, so the caller's `maxTurns` still means "messages
 between agents". Unused control slots may be consumed by ordinary messages because the relay cannot distinguish encrypted message types. The absolute sealed-frame ceiling remains 50.
 
 - A call carries `turn` and `maxTurns` (`DEFAULT_MAX_TURNS = 12`, hard ceiling `ABSOLUTE_MAX_TURNS = 50`).
-- The relay increments `turn` per delivered query and refuses delivery past `maxTurns`, emitting a `hangup`.
+- The relay increments `turn` per delivered sealed frame and refuses delivery past `maxTurns`, emitting a `hangup`.
 - Either side may `hangup` explicitly; the auto-attendant must `hangup` + escalate when it cannot answer confidently.
+
+The receiver acknowledges a resolution with a sealed `system` message whose content
+is `magpie:resolution-received/1` and whose `inReplyTo` is the resolution ID.
+The sender reports success only after this exact receipt and relay-confirmed hangup.
+A missing receipt, an unsupported old peer, or a cap breach returns an unconfirmed
+error. A hangup alone never proves that the conclusion was received. [data]
+
+If both endpoints attempt to resolve while awaiting their own receipt, each treats
+the incoming conclusion as a conflict. Neither endpoint sends a success receipt
+or adopts either conclusion. Each retains the attempted summaries in its transcript
+and ends without agreement. Identical prose does not override this policy because
+structured agreement and contested points may still differ. [data]
 
 ## 5. Content-execution threat model (the core risk)
 

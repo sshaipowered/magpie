@@ -52,6 +52,8 @@ interface CallCtx {
   summary: string | null;
   /** The structured form of the same resolution; `summary` is its `.summary`. */
   resolution: Resolution | null;
+  /** A terminal conflict cannot be turned into success by a later frame. */
+  resolutionConflict: boolean;
   /** What the peer announced about itself, if anything. Attribution only. */
   peerIdentity: IdentityRef | null;
   /** Which end of the call this is. The opener owns the topic. */
@@ -175,6 +177,7 @@ export class MagpieClient {
       transcript: [],
       summary: null,
       resolution: null,
+      resolutionConflict: false,
       peerIdentity: null,
       role: 'opener',
     });
@@ -207,6 +210,7 @@ export class MagpieClient {
       transcript: [],
       summary: null,
       resolution: null,
+      resolutionConflict: false,
       peerIdentity: null,
       role: 'joiner',
     });
@@ -252,6 +256,8 @@ export class MagpieClient {
     const ctx = this.#ctx.get(callId);
     if (!ctx) throw new Error(`no such call ${callId}`);
     if (!ctx.peer) throw new Error('cannot resolve before a peer has joined');
+    if (ctx.resolutionConflict) throw new Error('concurrent resolutions ended this call without agreement');
+    if (ctx.resolution) throw new Error('a conclusion was already received on this call');
     const r: Resolution = typeof resolution === 'string' ? { summary: resolution } : resolution;
     const msg: Message = {
       v: PROTOCOL_VERSION,
@@ -571,6 +577,14 @@ export class MagpieClient {
     if (msg.type === 'resolve') {
       const r = decodeResolution(msg.content);
       const ctx = this.#ctx.get(callId);
+      if (ctx?.resolutionConflict || ctx?.resolution) return;
+      const localPending = this.#pendingResolution.get(callId);
+      if (localPending) {
+        if (ctx) ctx.resolutionConflict = true;
+        this.#record(callId, { ...msg, content: r.summary });
+        localPending.reject(new Error('concurrent resolutions ended this call without agreement'));
+        return;
+      }
       if (ctx) {
         ctx.resolution = r;
         ctx.summary = r.summary;

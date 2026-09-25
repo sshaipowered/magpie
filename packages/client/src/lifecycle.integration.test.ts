@@ -55,6 +55,22 @@ describe('call lifecycle', () => {
     expect(b.buildReport(callId, 'resolved')?.summary).toBe('done');
   });
 
+  it('rejects simultaneous conclusions instead of reporting different successful summaries', async () => {
+    const { a, b, callId } = await pair(12);
+    const accepted: string[] = [];
+    a.onResolved((_id, summary) => accepted.push(summary));
+    b.onResolved((_id, summary) => accepted.push(summary));
+    const outcomes = await Promise.allSettled([
+      a.resolve(callId, 'conclusion A'), b.resolve(callId, 'conclusion B'),
+    ]);
+    expect(outcomes.map(o => o.status)).toEqual(['rejected', 'rejected']);
+    expect(accepted).toEqual([]);
+    for (const c of [a, b]) {
+      expect(c.buildReport(callId, 'hung-up')?.summary).toBeNull();
+      await expect(c.send(callId, message(callId, '@test/a', 'query'))).rejects.toThrow(/no channel/);
+    }
+  });
+
   it('fails honestly if the absolute relay cap rejects a conclusion', async () => {
     const { a, b, callId } = await pair(50);
     for (let n = 0; n < 48; n++) {
