@@ -127,6 +127,7 @@ export class CallSession {
   #closedReason: string | null = null;
   /** Built and persisted at close. The hand-off artifact for anything downstream. */
   #lastReport: CallReport | null = null;
+  #reportSaved = false;
 
   /** Inbound peer `query` messages not yet handed to the host model. */
   readonly #inbound: Message[] = [];
@@ -302,11 +303,22 @@ export class CallSession {
     if (this.#lastReport) {
       try {
         saveReport(this.#lastReport);
+        this.#reportSaved = true;
       } catch (err) {
         process.stderr.write(`[magpie-mcp] could not save report for ${this.callId}: ${String(err)}\n`);
       }
+      // The session owns this snapshot even if persistence failed. The shared
+      // client must not retain a second reference for every completed call.
+      this.#client.releaseReport(this.callId);
     }
   }
+
+  /** Safe automatic eviction never discards unread content or an unsaved report. */
+  get disposable(): boolean {
+    return this.#closed && this.#reportSaved && this.#inbound.length === 0;
+  }
+
+  get reportSaved(): boolean { return this.#reportSaved; }
 
   /** The report built at close, or null while the call is still open. */
   get lastReport(): CallReport | null {
@@ -739,6 +751,9 @@ export class SessionStore {
   readonly #clients = new Map<string, Promise<MagpieClient>>();
 
   readonly #sessions = new Map<string, CallSession>();
+  readonly #maxSessions: number;
+  #opening = 0;
+  #closed = false;
 
   constructor(opts: {
     self: Extension;
@@ -746,6 +761,8 @@ export class SessionStore {
     relayUrl?: string | null;
     askTimeoutMs?: number;
     askWaitMs?: number;
+    /** Includes active, unread closed, and currently opening sessions. */
+    maxSessions?: number;
     /** Test seam: how to open a relay connection. Defaults to MagpieClient.connect. */
     connect?: (url: string) => Promise<MagpieClient>;
   }) {
@@ -753,6 +770,10 @@ export class SessionStore {
     this.#defaultRelayUrl = opts.relayUrl ?? null;
     this.#askTimeoutMs = opts.askTimeoutMs;
     this.#askWaitMs = opts.askWaitMs;
+    this.#maxSessions = opts.maxSessions ?? 128;
+    if (!Number.isSafeInteger(this.#maxSessions) || this.#maxSessions < 1) {
+      throw new Error('maxSessions must be a positive safe integer');
+    }
     this.#connect = opts.connect ?? ((url) => MagpieClient.connect(url, { identity: this.identityRef }));
   }
 
@@ -793,6 +814,10 @@ export class SessionStore {
     }
 
     const connecting = this.#connect(url).then((client) => {
+      if (this.#closed) {
+        client.close();
+        throw new Error('session store closed during connection');
+      }
       client.onMessage((msg) => {
         const session = this.#sessions.get(msg.callId);
         if (session) session.ingest(msg);
@@ -854,25 +879,27 @@ export class SessionStore {
    * `relayUrl` (if given) overrides the configured default for this call.
    */
   async start(topic: string, maxTurns?: number, relayUrl?: string): Promise<CallSession> {
-    const url = this.#resolveRelay(relayUrl, 'sb_start');
-    const client = await this.#ensureClient(url);
-    const opened = await client.start({
-      from: this.self,
-      topic,
-      ...(maxTurns !== undefined ? { maxTurns } : {}),
-    });
-    const session = new CallSession({
-      client,
-      callId: opened.callId,
-      self: this.self,
-      peer: null, // learned when the peer joins
-      topic,
-      code: opened.code,
-      ...(this.#askTimeoutMs !== undefined ? { askTimeoutMs: this.#askTimeoutMs } : {}),
-      ...(this.#askWaitMs !== undefined ? { askWaitMs: this.#askWaitMs } : {}),
-    });
-    this.#sessions.set(session.callId, session);
-    return session;
+    this.#reserve();
+    try {
+      const url = this.#resolveRelay(relayUrl, 'sb_start');
+      const client = await this.#ensureClient(url);
+      const opened = await client.start({
+        from: this.self,
+        topic,
+        ...(maxTurns !== undefined ? { maxTurns } : {}),
+      });
+      const session = new CallSession({
+        client,
+        callId: opened.callId,
+        self: this.self,
+        peer: null, // learned when the peer joins
+        topic,
+        code: opened.code,
+        ...(this.#askTimeoutMs !== undefined ? { askTimeoutMs: this.#askTimeoutMs } : {}),
+        ...(this.#askWaitMs !== undefined ? { askWaitMs: this.#askWaitMs } : {}),
+      });
+      return this.#register(session);
+    } finally { this.#opening--; }
   }
 
   /**
@@ -881,22 +908,48 @@ export class SessionStore {
    * needs NO relay configuration when handed a full invite.
    */
   async join(inviteOrCode: string): Promise<CallSession> {
-    const invite = parseInvite(inviteOrCode);
-    const url = this.#resolveRelay(invite.relayUrl, 'sb_join with a bare code');
-    const client = await this.#ensureClient(url);
-    const joined = await client.join({ from: this.self, code: invite.code });
-    const session = new CallSession({
-      client,
-      callId: joined.callId,
-      self: this.self,
-      peer: joined.peer,
-      topic: '(joined)',
-      code: null,
-      ...(this.#askTimeoutMs !== undefined ? { askTimeoutMs: this.#askTimeoutMs } : {}),
-      ...(this.#askWaitMs !== undefined ? { askWaitMs: this.#askWaitMs } : {}),
-    });
+    this.#reserve();
+    try {
+      const invite = parseInvite(inviteOrCode);
+      const url = this.#resolveRelay(invite.relayUrl, 'sb_join with a bare code');
+      const client = await this.#ensureClient(url);
+      const joined = await client.join({ from: this.self, code: invite.code });
+      const session = new CallSession({
+        client,
+        callId: joined.callId,
+        self: this.self,
+        peer: joined.peer,
+        topic: '(joined)',
+        code: null,
+        ...(this.#askTimeoutMs !== undefined ? { askTimeoutMs: this.#askTimeoutMs } : {}),
+        ...(this.#askWaitMs !== undefined ? { askWaitMs: this.#askWaitMs } : {}),
+      });
+      return this.#register(session);
+    } finally { this.#opening--; }
+  }
+
+  #register(session: CallSession): CallSession {
+    if (this.#closed) {
+      session.markClosed('store closed');
+      throw new Error('session store closed while opening a call');
+    }
     this.#sessions.set(session.callId, session);
     return session;
+  }
+
+  #prune(): void {
+    for (const [id, session] of this.#sessions) {
+      if (session.disposable) this.#sessions.delete(id);
+    }
+  }
+
+  #reserve(): void {
+    if (this.#closed) throw new Error('session store is closed');
+    this.#prune();
+    if (this.#sessions.size + this.#opening >= this.#maxSessions) {
+      throw new Error(`session capacity ${this.#maxSessions} reached; drain closed calls with sb_listen or explicitly sb_hangup finished calls; preserve any unsaved reports first`);
+    }
+    this.#opening++;
   }
 
   /** Look up a live session, throwing a clear error if absent. */
@@ -915,20 +968,24 @@ export class SessionStore {
     const s = this.#sessions.get(callId);
     if (!s) return;
     await s.hangup();
-    this.#sessions.delete(callId);
+    this.forget(callId);
   }
 
   /** Drop a call from the map without re-hanging-up (already closed/resolved). */
   forget(callId: string): void {
-    this.#sessions.delete(callId);
+    const session = this.#sessions.get(callId);
+    if (session && !session.closed) throw new Error('cannot forget an open call; hang up first');
+    if (session?.reportSaved) this.#sessions.delete(callId);
   }
 
   list(): SessionInfo[] {
+    this.#prune();
     return [...this.#sessions.values()].map((s) => s.info());
   }
 
   /** Close every relay connection and drop all call state. */
   close(): void {
+    this.#closed = true;
     for (const s of this.#sessions.values()) s.markClosed('store closed');
     this.#sessions.clear();
     for (const pending of this.#clients.values()) {

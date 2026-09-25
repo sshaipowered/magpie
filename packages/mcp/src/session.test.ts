@@ -31,6 +31,7 @@ function fakeClient(): {
   const sent: Message[] = [];
   const resolved: { callId: string; summary: string }[] = [];
   const client = {
+    releaseReport: vi.fn(),
     send: vi.fn(async (_callId: string, msg: Message) => {
       sent.push(msg);
     }),
@@ -258,6 +259,7 @@ function fakeRelayClient(url: string): {
   const hangupCbs: ((reason: string, callId?: string | null) => void)[] = [];
   let connected = true;
   const client = {
+    releaseReport: vi.fn(),
     relayUrlForTest: url,
     get isConnected() {
       return connected;

@@ -341,6 +341,13 @@ export class MagpieClient {
     };
   }
 
+  /** Release transcript ownership after the caller has captured its terminal report.
+   * Wire channels/receipts keep their existing lifecycle until relay termination.
+   */
+  releaseReport(callId: string): void {
+    this.#ctx.delete(callId);
+  }
+
   #record(callId: string, msg: Message): void {
     const ctx = this.#ctx.get(callId);
     if (!ctx) return;
