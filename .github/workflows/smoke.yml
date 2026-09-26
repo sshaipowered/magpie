@@ -136,17 +136,20 @@ jobs:
       # scheduled runs died on MODULE_NOT_FOUND without ever reaching the relay.
       - uses: actions/checkout@v4
 
+      # `gh release download`, not the public URL: on the release path the
+      # release is still a DRAFT, which the public URL cannot serve. The bytes
+      # are the same archive users get once it is published.
       - name: Download and extract the release archive (unix)
         if: runner.os != 'Windows'
         shell: bash
         env:
-          URL: https://github.com/sshaipowered/magpie/releases/download/${{ needs.resolve.outputs.tag }}/${{ matrix.asset }}
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.resolve.outputs.tag }}
+          ASSET: ${{ matrix.asset }}
         run: |
           set -euo pipefail
           mkdir -p bin
-          # -f matters: without it a 404 HTML page downloads "successfully" and
-          # surfaces later as a baffling tar error.
-          curl -fsSL --retry 3 --retry-all-errors --max-time 180 -o asset.tar.gz "$URL"
+          gh release download "$TAG" --repo "$GITHUB_REPOSITORY" --pattern "$ASSET" --output asset.tar.gz
           test "$(wc -c < asset.tar.gz)" -gt 1000000
           tar -xzf asset.tar.gz -C bin
           # Members already carry 0755, but this becomes mandatory the moment
@@ -162,14 +165,14 @@ jobs:
         if: runner.os == 'Windows'
         shell: pwsh
         env:
-          URL: https://github.com/sshaipowered/magpie/releases/download/${{ needs.resolve.outputs.tag }}/${{ matrix.asset }}
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.resolve.outputs.tag }}
+          ASSET: ${{ matrix.asset }}
         run: |
           $ErrorActionPreference = 'Stop'
           $ProgressPreference = 'SilentlyContinue'
           New-Item -ItemType Directory -Force bin | Out-Null
-          # curl.exe, not `curl`: in Windows PowerShell `curl` is an alias for
-          # Invoke-WebRequest, which understands none of these flags.
-          curl.exe -fsSL --retry 3 --retry-all-errors --max-time 180 -o asset.zip "$env:URL"
+          gh release download $env:TAG --repo $env:GITHUB_REPOSITORY --pattern $env:ASSET --output asset.zip
           if ($LASTEXITCODE -ne 0) { throw "download failed with exit $LASTEXITCODE" }
           if ((Get-Item asset.zip).Length -lt 1000000) { throw "asset.zip is implausibly small" }
           # System32's tar.exe is bsdtar and auto-detects zip. `-z` would be
@@ -240,6 +243,12 @@ jobs:
   # most ways to break silently: Pages serves install.ps1 as
   # application/octet-stream with no charset and no BOM, so how Windows
   # PowerShell 5.1 decodes it is a property of the HOST, invisible from here.
+  # On the release path the release under test is still a DRAFT, and the
+  # install one-liner resolves `releases/latest`, which never points at a
+  # draft. So here the front door exercises the CURRENT install scripts against
+  # the previously published binaries; the new archives are covered by the
+  # `smoke` matrix above. That is the intended split: this job is about the
+  # scripts, that one is about the binaries.
   frontdoor:
     needs: resolve
     strategy:

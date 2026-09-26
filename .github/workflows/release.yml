@@ -1,6 +1,12 @@
-# Build + attach prebuilt binaries on every v* tag.
+# On every v* tag: test → build → smoke the built archives → publish.
 # Artifacts per platform: magpie (CLI), magpie-relay, magpie-mcp (bun-compiled,
 # no Node needed) → magpie-<os>-<arch>.tar.gz (zip on Windows).
+#
+# Order is the point. The release is created as a DRAFT, which the installer's
+# `releases/latest` never resolves to, so nothing reaches a user until the
+# smoke test has driven a real call with the exact archives. v0.4.0's first
+# attempt published five broken archives before any test ran; that path no
+# longer exists.
 name: release
 on:
   push:
@@ -14,7 +20,24 @@ permissions:
   issues: write
 
 jobs:
+  # The unit suites, on a clean checkout. ci.yml runs the same on pushes, but
+  # a tag pushed atomically with main used to reach `build` before CI had a
+  # verdict. Now the tag waits for its own.
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 22 }
+      - uses: dtolnay/rust-toolchain@stable
+      - run: npm ci || npm install
+      - run: npx tsc -b
+      - run: cargo build --manifest-path rust/Cargo.toml -p magpie-relay
+      - run: npx vitest run
+      - run: cargo test --manifest-path rust/Cargo.toml
+
   build:
+    needs: test
     strategy:
       fail-fast: false
       matrix:
@@ -82,8 +105,11 @@ jobs:
           Copy-Item magpie-mcp.exe dist/
           Compress-Archive -Path dist/* -DestinationPath magpie-windows-x64.zip
 
+      # Draft: attached but invisible to `releases/latest` and to the public
+      # download URL. `publish` below flips it once smoke has passed.
       - uses: softprops/action-gh-release@v2
         with:
+          draft: true
           files: |
             magpie-*.tar.gz
             magpie-*.zip
@@ -98,3 +124,15 @@ jobs:
     uses: ./.github/workflows/smoke.yml
     with:
       tag: ${{ github.ref_name }}
+
+  # Only a green smoke makes the release real. A red one leaves the draft in
+  # place for inspection; users never saw it.
+  publish:
+    needs: smoke
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - run: gh release edit "${{ github.ref_name }}" --repo "${{ github.repository }}" --draft=false
+      - run: echo "published ${{ github.ref_name }}"
